@@ -101,7 +101,7 @@ fuDOWNLOAD "https://lists.blocklist.de/lists/all.txt" "known attacker" "blocklis
 fuDOWNLOAD "https://iplists.firehol.org/files/bitcoin_nodes_30d.ipset" "bitcoin node" "firehol_bitcoin"
 fuDOWNLOAD "https://iplists.firehol.org/files/botscout_30d.ipset" "form spammer" "firehol_botscout"
 fuDOWNLOAD "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/cruzit_web_attacks.ipset" "known attacker" "firehol_cruzit"
-fuDOWNLOAD "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/malwaredomainlist.ipset" "known atttacker" "firehol_mwdomainlist"
+fuDOWNLOAD "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/malwaredomainlist.ipset" "known attacker" "firehol_mwdomainlist"
 fuDOWNLOAD "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/proxylists_30d.ipset" "anonymizer" "firehol_proxylists"
 fuDOWNLOAD "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/proxyrss_30d.ipset" "anonymizer" "firehol_proxyrss"
 fuDOWNLOAD "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/proxyspy_30d.ipset" "anonymizer" "firehol_proxyspy"
