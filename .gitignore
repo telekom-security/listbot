@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.raw
+*.tmp
+*.yaml
+*.yaml.bz2
+*.log
+sid-msg.map
