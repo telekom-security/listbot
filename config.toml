@@ -24,6 +24,14 @@ cache_dir = ".cache/listbot"
 # Refresh cache entries after this age. Supported suffixes: m, h, d.
 cache_max_age = "6h"
 
+[feeds]
+# Filter active IP reputation feeds by usage profile.
+# all: use every feed enabled below, including unclear or restricted terms.
+# commercial: only feeds classified as explicitly commercial/permissive.
+# non-commercial: commercial/permissive plus explicitly non-commercial feeds.
+# This is a conservative technical policy, not legal advice; NOTICE keeps terms.
+usage_profile = "all"
+
 [feeds.iprep]
 # Malware, C2, compromised hosts, and scanner context.
 feodotracker = true

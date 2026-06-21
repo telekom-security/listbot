@@ -11,6 +11,7 @@ class Feed:
     parser: str = "generic"
     max_network_hosts: int = 65_536
     max_range_hosts: int = 65_536
+    usage_class: str = "unknown"
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,7 @@ ABUSECH_TERMS = "abuse.ch Terms of Use; no separate SPDX-style data license stat
 FIREHOL_MIRROR_TERMS = "FireHOL aggregate/mirror; upstream list licenses may vary."
 NO_EXPLICIT_LICENSE = "No explicit feed license found."
 TOR_TERMS = "Tor Project exit-list service; no explicit data license found on the feed endpoint."
+APPROVED_FEED_USAGE_CLASSES = frozenset({"unrestricted", "non_commercial", "restricted", "unknown"})
 
 APPROVED_IPREP_TAGS = frozenset(
     {
@@ -328,6 +330,7 @@ IPREP_FEEDS: tuple[Feed, ...] = (
         "feodotracker",
         "https://feodotracker.abuse.ch/downloads/ipblocklist.txt",
         "botnet C2",
+        usage_class="unrestricted",
     ),
     Feed(
         "threatfox_ip_port_recent",
@@ -358,6 +361,7 @@ IPREP_FEEDS: tuple[Feed, ...] = (
         "maltrail_mass_scanner",
         "https://raw.githubusercontent.com/stamparm/maltrail/master/trails/static/mass_scanner.txt",
         "mass scanner",
+        usage_class="unrestricted",
     ),
     Feed(
         "tor_bulk_exit",
@@ -430,6 +434,7 @@ IPREP_FEEDS: tuple[Feed, ...] = (
         "firehol_dshield",
         "https://iplists.firehol.org/files/dshield_30d.netset",
         "scan source",
+        usage_class="non_commercial",
     ),
     Feed(
         "firehol_darklist",
@@ -441,6 +446,7 @@ IPREP_FEEDS: tuple[Feed, ...] = (
         "binary_defense_banlist",
         "https://www.binarydefense.com/banlist.txt",
         "bad reputation",
+        usage_class="restricted",
     ),
     Feed(
         "firehol_blocklist_de_apache",
@@ -490,11 +496,13 @@ IPREP_FEEDS: tuple[Feed, ...] = (
         "https://feeds.dshield.org/block.txt",
         "scan source",
         parser="dshield",
+        usage_class="non_commercial",
     ),
     Feed(
         "ipsum_level3",
         "https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt",
         "bad reputation",
+        usage_class="unrestricted",
     ),
     Feed(
         "firehol_php_commenters_30d",
@@ -541,6 +549,7 @@ IPREP_FEEDS: tuple[Feed, ...] = (
         "bitwire_outbound",
         "https://raw.githubusercontent.com/bitwire-it/ipblocklist/main/outbound.txt",
         "bad reputation",
+        usage_class="non_commercial",
     ),
     Feed("botvrij", "https://www.botvrij.eu/data/ioclist.ip-dst.raw", "threat IOC"),
     Feed(
@@ -552,6 +561,7 @@ IPREP_FEEDS: tuple[Feed, ...] = (
         "turris",
         "https://view.sentinel.turris.cz/greylist-data/greylist-latest.csv",
         "service abuse",
+        usage_class="non_commercial",
     ),
     Feed(
         "firehol_anonymous",

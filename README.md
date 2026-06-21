@@ -90,6 +90,63 @@ You can leave the environment with:
 deactivate
 ```
 
+### Option 3: Docker / Docker Compose
+
+Build a local image:
+
+```bash
+docker build -t listbot:local .
+```
+
+Run the default combined build. The container writes artifacts to `./output`
+and keeps the download cache in `./.cache/listbot`:
+
+```bash
+mkdir -p output .cache/listbot
+docker run --rm \
+  -v "$PWD/config.toml:/config/listbot.toml:ro" \
+  -v "$PWD/output:/data" \
+  -v "$PWD/.cache/listbot:/cache/listbot" \
+  listbot:local
+```
+
+Run a single command through the same image:
+
+```bash
+docker run --rm \
+  -v "$PWD/config.toml:/config/listbot.toml:ro" \
+  -v "$PWD/output:/data" \
+  -v "$PWD/.cache/listbot:/cache/listbot" \
+  listbot:local gen-iprep --config /config/listbot.toml --output-dir /data --cache-dir /cache/listbot
+```
+
+With Docker Compose:
+
+```bash
+mkdir -p output .cache/listbot
+docker compose run --rm listbot
+```
+
+To remove the one-off container and then clean up the Compose project network
+and any named Compose volumes after a successful run:
+
+```bash
+docker compose run --rm listbot && docker compose down -v
+```
+
+In the provided `docker-compose.yml`, `output` and `.cache/listbot` are
+bind-mounted host directories, so `down -v` does not delete those directories or
+their generated files. It only removes Docker-managed resources created by
+Compose.
+
+The image runs as UID/GID `1000` by default so bind-mounted output files are
+usable on typical Linux developer machines. Build with explicit IDs if your
+host user differs:
+
+```bash
+LISTBOT_UID="$(id -u)" LISTBOT_GID="$(id -g)" docker compose build
+```
+
 ## Commands
 
 ### `run`
@@ -112,6 +169,7 @@ Useful options:
 - `--cache` / `--no-cache`: enable or disable the local raw-download cache
 - `--cache-dir PATH`: cache directory for feed payloads and metadata
 - `--cache-max-age 6h`: refresh cache entries after this age; supports `m`, `h`, `d`
+- `--feed-usage-profile all|commercial|non-commercial`: filter IPREP feeds by usage profile
 - `--check-thresholds`: enable minimum count checks
 - `--min-cve 5000`: minimum CVE mappings for a checked run
 - `--min-iprep 200000`: minimum IP reputation mappings for a checked run
@@ -129,6 +187,8 @@ listbot gen-cve --config config.toml --output-dir .
 The command uses the same default cache as `run`. Use `--no-cache` for a live
 download or override the cache location with `--cache-dir`. If `./config.toml`
 exists, it is loaded automatically; use `--config` to select another file.
+`--feed-usage-profile` is accepted for config consistency, but CVE generation
+does not use IP reputation feeds.
 
 The parser keeps the legacy scalar YAML format. If one SID contains multiple
 CVE/CAN references, the first reference in source order wins, so values stay as
@@ -145,6 +205,8 @@ listbot gen-iprep --config config.toml --output-dir .
 The command uses the same default cache as `run`. Use `--no-cache` for live feed
 downloads or override the cache age with `--cache-max-age`. If `./config.toml`
 exists, it is loaded automatically; use `--config` to select another file.
+Use `--feed-usage-profile` to restrict active feeds to a commercial,
+non-commercial, or all-feeds profile.
 
 The parser validates IPv4 addresses with Python's `ipaddress` module and only
 writes globally routable IPv4 addresses. This avoids false matches from comments
@@ -184,6 +246,11 @@ enabled = true
 cache_dir = ".cache/listbot"
 cache_max_age = "6h"
 
+[feeds]
+# all, commercial, or non-commercial.
+# all is an operational choice, not a legal clearance.
+usage_profile = "all"
+
 [feeds.iprep]
 # The real config.toml lists every IPREP feed explicitly.
 # A loaded config must contain every known feed ID with a boolean value.
@@ -195,7 +262,7 @@ firehol_anonymous = true
 [thresholds]
 enabled = false
 min_cve = 5000
-min_iprep = 200000
+min_iprep = 500000
 
 [logging]
 enabled = false
@@ -223,6 +290,17 @@ The `[feeds.iprep]` section is intentionally strict. When a config file is
 loaded, every known IP reputation feed must be present as `true` or `false`.
 Unknown feed IDs and missing feed IDs are rejected so feed changes are explicit.
 Without a config file, listbot uses the built-in default feed set.
+
+The global `[feeds].usage_profile` filter is applied after the individual
+feed booleans:
+
+- `commercial`: only feeds classified as explicitly commercial/permissive
+- `non-commercial`: commercial/permissive feeds plus explicitly non-commercial feeds
+- `all`: every enabled feed, including unclear or restricted upstream terms
+
+This profile is a conservative technical policy, not legal advice. The generated
+`NOTICE` remains the source record for upstream terms, retrieval timestamps, and
+derived-data attribution.
 
 ## Terminal Output
 
@@ -272,6 +350,11 @@ the tag for that IP.
 `[feeds.iprep]` section is explicit by design: every feed ID must be present, so
 operators can review new sources before running scheduled builds.
 
+`[feeds].usage_profile` adds a second, global filter for environments with
+different usage requirements. The filter is intentionally defensive: feeds
+without explicit licensing or terms are treated as `unknown` and are only used
+with `all`.
+
 Tags are short analyst-facing labels intended for Kibana dashboards. Specific
 tags are preferred when a feed states a concrete behavior such as C2, scanning,
 open proxies, service abuse, or form spam. `attack source` is used for generic
@@ -281,6 +364,20 @@ attack-focused feeds where the upstream data does not support a narrower claim.
 Feed data is not relicensed by this project. The license/terms column records
 what upstream currently publishes or what is visible in the feed itself. If no
 explicit feed license was found, the table says so instead of guessing.
+
+Usage classes used by the profile filter:
+
+- `unrestricted`: used by `commercial`, `non-commercial`, and `all`
+- `non_commercial`: used by `non-commercial` and `all`
+- `restricted`: used only by `all`
+- `unknown`: used only by `all`
+
+Initial conservative classification:
+
+- `unrestricted`: `feodotracker`, `maltrail_mass_scanner`, `ipsum_level3`
+- `non_commercial`: `firehol_dshield`, `dshield`, `bitwire_outbound`, `turris`
+- `restricted`: `binary_defense_banlist`
+- `unknown`: all other IP reputation feeds
 
 | Feed ID | Source | Tag | Purpose and notes | Upstream license / terms |
 | --- | --- | --- | --- | --- |

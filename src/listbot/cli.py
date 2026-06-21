@@ -18,6 +18,7 @@ from .config import (
     DEFAULT_CONFIG_PATH,
     ConfigError,
     RunConfig,
+    VALID_FEED_USAGE_PROFILES,
     enabled_iprep_feeds,
     load_run_config,
     merge_run_config,
@@ -217,6 +218,12 @@ def _add_config_arg(parser: argparse.ArgumentParser) -> None:
         metavar="PATH",
         help="Explicit TOML config file; otherwise ./config.toml is loaded when present",
     )
+    config.add_argument(
+        "--feed-usage-profile",
+        choices=sorted(VALID_FEED_USAGE_PROFILES),
+        metavar="PROFILE",
+        help="Filter IPREP feeds by usage profile: all, commercial, or non-commercial (default: config or all)",
+    )
 
 
 def _add_output_arg(parser: argparse.ArgumentParser, *, uses_config: bool) -> None:
@@ -373,6 +380,7 @@ def _config_from_args(args: argparse.Namespace) -> RunConfig:
         cache_enabled=getattr(args, "cache_enabled", None),
         cache_dir=getattr(args, "cache_dir", None),
         cache_max_age=getattr(args, "cache_max_age", None),
+        feed_usage_profile=getattr(args, "feed_usage_profile", None),
     )
 
 

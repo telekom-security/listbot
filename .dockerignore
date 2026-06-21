@@ -1,9 +1,8 @@
+.git/
 .venv/
 .cache/
-output/*
-!output/.gitkeep
-__pycache__/
 .pytest_cache/
+__pycache__/
 *.pyc
 *.raw
 *.tmp
@@ -12,3 +11,5 @@ __pycache__/
 *.log
 NOTICE
 sid-msg.map
+output/*
+!output/.gitkeep

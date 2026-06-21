@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from listbot.feeds import APPROVED_IPREP_TAGS, FEED_NOTICES, IPREP_FEEDS
+from listbot.feeds import APPROVED_FEED_USAGE_CLASSES, APPROVED_IPREP_TAGS, FEED_NOTICES, IPREP_FEEDS
 from listbot import generators
 from listbot.generators import (
     BuildResult,
@@ -33,6 +33,10 @@ def test_all_iprep_feeds_have_notice_metadata() -> None:
 
 def test_default_iprep_tags_use_approved_analyst_vocabulary() -> None:
     assert {feed.tag for feed in IPREP_FEEDS} <= APPROVED_IPREP_TAGS
+
+
+def test_default_iprep_feeds_use_approved_usage_classes() -> None:
+    assert {feed.usage_class for feed in IPREP_FEEDS} <= APPROVED_FEED_USAGE_CLASSES
 
 
 def test_removed_overbroad_tags_are_not_default_vocabulary() -> None:
@@ -108,6 +112,29 @@ def test_analyst_facing_feed_tags_are_explicit() -> None:
 
     for name, tag in expected_tags.items():
         assert actual_tags[name] == tag
+
+
+def test_feed_usage_classes_are_conservative() -> None:
+    actual_usage_classes = {feed.name: feed.usage_class for feed in IPREP_FEEDS}
+    unrestricted = {
+        "feodotracker",
+        "maltrail_mass_scanner",
+        "ipsum_level3",
+    }
+    non_commercial = {
+        "firehol_dshield",
+        "dshield",
+        "bitwire_outbound",
+        "turris",
+    }
+    restricted = {"binary_defense_banlist"}
+
+    assert {name for name, usage in actual_usage_classes.items() if usage == "unrestricted"} == unrestricted
+    assert {name for name, usage in actual_usage_classes.items() if usage == "non_commercial"} == non_commercial
+    assert {name for name, usage in actual_usage_classes.items() if usage == "restricted"} == restricted
+    assert {name for name, usage in actual_usage_classes.items() if usage == "unknown"} == (
+        set(actual_usage_classes) - unrestricted - non_commercial - restricted
+    )
 
 
 def test_write_translation_map_uses_legacy_scalar_format(tmp_path) -> None:

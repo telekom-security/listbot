@@ -14,6 +14,7 @@ DEFAULT_CACHE_DIR = ".cache/listbot"
 DEFAULT_CACHE_MAX_AGE = "6h"
 _DURATION_RE = re.compile(r"^([1-9][0-9]*)([mhd])$")
 _IPREP_FEED_IDS = tuple(feed.name for feed in IPREP_FEEDS)
+VALID_FEED_USAGE_PROFILES = frozenset({"all", "commercial", "non-commercial"})
 
 
 class ConfigError(ValueError):
@@ -39,6 +40,7 @@ class RunConfig:
     cache_enabled: bool = True
     cache_dir: str = DEFAULT_CACHE_DIR
     cache_max_age: str = DEFAULT_CACHE_MAX_AGE
+    feed_usage_profile: str = "all"
     iprep_feeds: dict[str, bool] = field(default_factory=default_iprep_feed_config)
 
 
@@ -60,7 +62,7 @@ def parse_run_config(data: dict[str, Any]) -> RunConfig:
     thresholds = _section(data, "thresholds", {"enabled", "min_cve", "min_iprep"})
     logging = _section(data, "logging", {"enabled", "dir"})
     cache = _section(data, "cache", {"enabled", "cache_dir", "cache_max_age"})
-    feeds = _section(data, "feeds", {"iprep"})
+    feeds = _section(data, "feeds", {"usage_profile", "iprep"})
 
     return RunConfig(
         output_dir=_str(run, "output_dir", "."),
@@ -76,6 +78,7 @@ def parse_run_config(data: dict[str, Any]) -> RunConfig:
         cache_enabled=_bool(cache, "enabled", True),
         cache_dir=_str(cache, "cache_dir", DEFAULT_CACHE_DIR),
         cache_max_age=_duration_str(cache, "cache_max_age", DEFAULT_CACHE_MAX_AGE),
+        feed_usage_profile=_feed_usage_profile(feeds),
         iprep_feeds=_iprep_feed_config(feeds),
     )
 
@@ -96,6 +99,7 @@ def merge_run_config(
     cache_enabled: bool | None = None,
     cache_dir: str | None = None,
     cache_max_age: str | None = None,
+    feed_usage_profile: str | None = None,
 ) -> RunConfig:
     thresholds_enabled = config.thresholds_enabled
     logging_enabled = config.logging_enabled
@@ -126,12 +130,21 @@ def merge_run_config(
         cache_enabled=cache_enabled if cache_enabled is not None else config.cache_enabled,
         cache_dir=cache_dir if cache_dir is not None else config.cache_dir,
         cache_max_age=_validate_duration(cache_max_age) if cache_max_age is not None else config.cache_max_age,
+        feed_usage_profile=(
+            _validate_feed_usage_profile(feed_usage_profile)
+            if feed_usage_profile is not None
+            else config.feed_usage_profile
+        ),
         iprep_feeds=dict(config.iprep_feeds),
     )
 
 
 def enabled_iprep_feeds(config: RunConfig) -> tuple[Feed, ...]:
-    return tuple(feed for feed in IPREP_FEEDS if config.iprep_feeds[feed.name])
+    return tuple(
+        feed
+        for feed in IPREP_FEEDS
+        if config.iprep_feeds[feed.name] and _feed_matches_usage_profile(feed, config.feed_usage_profile)
+    )
 
 
 def parse_cache_max_age(value: str) -> timedelta:
@@ -178,6 +191,25 @@ def _iprep_feed_config(feeds: dict[str, Any]) -> dict[str, bool]:
             raise ConfigError(f"Config value feeds.iprep.{feed_id} must be a boolean")
         values[feed_id] = value
     return values
+
+
+def _feed_usage_profile(feeds: dict[str, Any]) -> str:
+    return _validate_feed_usage_profile(_str(feeds, "usage_profile", "all"))
+
+
+def _validate_feed_usage_profile(value: str) -> str:
+    if value not in VALID_FEED_USAGE_PROFILES:
+        allowed = ", ".join(sorted(VALID_FEED_USAGE_PROFILES))
+        raise ConfigError(f"Config value usage_profile must be one of: {allowed}")
+    return value
+
+
+def _feed_matches_usage_profile(feed: Feed, profile: str) -> bool:
+    if profile == "all":
+        return True
+    if profile == "commercial":
+        return feed.usage_class == "unrestricted"
+    return feed.usage_class in {"unrestricted", "non_commercial"}
 
 
 def _reject_unknown(section: str, data: dict[str, Any], allowed_keys: set[str]) -> None:

@@ -1,0 +1,13 @@
+services:
+  listbot:
+    build:
+      context: .
+      args:
+        LISTBOT_UID: ${LISTBOT_UID:-1000}
+        LISTBOT_GID: ${LISTBOT_GID:-1000}
+    image: listbot:local
+    init: true
+    volumes:
+      - ./config.toml:/config/listbot.toml:ro
+      - ./output:/data
+      - ./.cache/listbot:/cache/listbot

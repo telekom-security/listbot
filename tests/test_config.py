@@ -7,6 +7,7 @@ import pytest
 from listbot.config import (
     ConfigError,
     RunConfig,
+    VALID_FEED_USAGE_PROFILES,
     default_iprep_feed_config,
     enabled_iprep_feeds,
     load_run_config,
@@ -44,6 +45,7 @@ def test_parse_run_config_reads_toml_schema() -> None:
     assert config.cache_enabled is True
     assert config.cache_dir == "/var/cache/listbot"
     assert config.cache_max_age == "2d"
+    assert config.feed_usage_profile == "all"
     assert config.iprep_feeds == default_iprep_feed_config()
 
 
@@ -134,6 +136,66 @@ def test_disabled_iprep_feed_is_not_selected() -> None:
     assert "feodotracker" not in {feed.name for feed in enabled_iprep_feeds(config)}
 
 
+@pytest.mark.parametrize("profile", sorted(VALID_FEED_USAGE_PROFILES))
+def test_valid_feed_usage_profiles_are_accepted(profile: str) -> None:
+    config = parse_run_config(_config_data("feeds", {"usage_profile": profile, "iprep": default_iprep_feed_config()}))
+
+    assert config.feed_usage_profile == profile
+
+
+def test_invalid_feed_usage_profile_is_rejected() -> None:
+    with pytest.raises(ConfigError, match="usage_profile must be one of"):
+        parse_run_config(
+            _config_data("feeds", {"usage_profile": "enterprise", "iprep": default_iprep_feed_config()})
+        )
+
+
+def test_commercial_profile_selects_only_unrestricted_feeds() -> None:
+    config = parse_run_config(
+        _config_data("feeds", {"usage_profile": "commercial", "iprep": default_iprep_feed_config()})
+    )
+
+    assert {feed.name for feed in enabled_iprep_feeds(config)} == {
+        "feodotracker",
+        "maltrail_mass_scanner",
+        "ipsum_level3",
+    }
+
+
+def test_non_commercial_profile_selects_unrestricted_and_non_commercial_feeds() -> None:
+    config = parse_run_config(
+        _config_data("feeds", {"usage_profile": "non-commercial", "iprep": default_iprep_feed_config()})
+    )
+
+    assert {feed.name for feed in enabled_iprep_feeds(config)} == {
+        "feodotracker",
+        "maltrail_mass_scanner",
+        "firehol_dshield",
+        "dshield",
+        "ipsum_level3",
+        "bitwire_outbound",
+        "turris",
+    }
+
+
+def test_all_profile_respects_individual_feed_switches() -> None:
+    feeds = default_iprep_feed_config()
+    feeds["feodotracker"] = False
+    config = parse_run_config(_config_data("feeds", {"usage_profile": "all", "iprep": feeds}))
+
+    selected = {feed.name for feed in enabled_iprep_feeds(config)}
+    assert "feodotracker" not in selected
+    assert selected == {feed_id for feed_id, enabled in feeds.items() if enabled}
+
+
+def test_usage_profile_respects_individual_feed_switches() -> None:
+    feeds = default_iprep_feed_config()
+    feeds["ipsum_level3"] = False
+    config = parse_run_config(_config_data("feeds", {"usage_profile": "commercial", "iprep": feeds}))
+
+    assert {feed.name for feed in enabled_iprep_feeds(config)} == {"feodotracker", "maltrail_mass_scanner"}
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -155,9 +217,14 @@ def test_invalid_cache_max_age_is_rejected(value: str) -> None:
 def test_load_run_config_reads_file(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     feed_lines = "\n".join(f"{feed_id} = true" for feed_id in default_iprep_feed_config())
-    config_path.write_text(f"[run]\noutput_dir = \"out\"\n\n[feeds.iprep]\n{feed_lines}\n", encoding="utf-8")
+    config_path.write_text(
+        f"[run]\noutput_dir = \"out\"\n\n[feeds]\nusage_profile = \"commercial\"\n\n[feeds.iprep]\n{feed_lines}\n",
+        encoding="utf-8",
+    )
 
-    assert load_run_config(config_path).output_dir == "out"
+    config = load_run_config(config_path)
+    assert config.output_dir == "out"
+    assert config.feed_usage_profile == "commercial"
 
 
 def _config_data(section: str | None = None, values: object | None = None, **sections: object) -> dict[str, object]:

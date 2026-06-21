@@ -10,25 +10,39 @@ from listbot.generators import BuildResult, FeedStat
 
 
 def test_run_command_parses() -> None:
-    args = build_parser().parse_args(["run", "--output-dir", "out", "--workers", "2", "--no-cache"])
+    args = build_parser().parse_args(
+        ["run", "--output-dir", "out", "--workers", "2", "--no-cache", "--feed-usage-profile", "commercial"]
+    )
 
     assert args.command == "run"
     assert args.output_dir == "out"
     assert args.workers == 2
     assert args.cache_enabled is False
+    assert args.feed_usage_profile == "commercial"
 
 
 def test_gen_commands_accept_cache_options() -> None:
     iprep = build_parser().parse_args(
-        ["gen-iprep", "--no-cache", "--cache-dir", "cache", "--cache-max-age", "2d"]
+        [
+            "gen-iprep",
+            "--no-cache",
+            "--cache-dir",
+            "cache",
+            "--cache-max-age",
+            "2d",
+            "--feed-usage-profile",
+            "non-commercial",
+        ]
     )
-    cve = build_parser().parse_args(["gen-cve", "--cache", "--cache-max-age", "30m"])
+    cve = build_parser().parse_args(["gen-cve", "--cache", "--cache-max-age", "30m", "--feed-usage-profile", "all"])
 
     assert iprep.cache_enabled is False
     assert iprep.cache_dir == "cache"
     assert iprep.cache_max_age == "2d"
+    assert iprep.feed_usage_profile == "non-commercial"
     assert cve.cache_enabled is True
     assert cve.cache_max_age == "30m"
+    assert cve.feed_usage_profile == "all"
 
 
 def test_run_auto_loads_config_toml(tmp_path, monkeypatch) -> None:
@@ -47,6 +61,7 @@ def test_gen_commands_auto_load_config_toml(tmp_path, monkeypatch) -> None:
         tmp_path / "config.toml",
         run={"output_dir": "from-config", "timeout": 12.0, "suricata_version": "8.0.0"},
         cache={"enabled": False},
+        usage_profile="commercial",
     )
 
     iprep_config = _config_from_args(build_parser().parse_args(["gen-iprep"]))
@@ -55,8 +70,19 @@ def test_gen_commands_auto_load_config_toml(tmp_path, monkeypatch) -> None:
     assert iprep_config.output_dir == "from-config"
     assert iprep_config.timeout == 12.0
     assert iprep_config.cache_enabled is False
+    assert iprep_config.feed_usage_profile == "commercial"
     assert cve_config.output_dir == "from-config"
     assert cve_config.suricata_version == "8.0.0"
+    assert cve_config.feed_usage_profile == "commercial"
+
+
+def test_cli_feed_usage_profile_overrides_config(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_config(tmp_path / "config.toml", usage_profile="all")
+
+    config = _config_from_args(build_parser().parse_args(["gen-iprep", "--feed-usage-profile", "commercial"]))
+
+    assert config.feed_usage_profile == "commercial"
 
 
 def test_run_does_not_auto_load_listbot_toml(tmp_path, monkeypatch) -> None:
@@ -115,6 +141,7 @@ def test_run_help_is_grouped_and_explains_config_defaults(capsys) -> None:
     assert "--output-dir PATH" in help_text
     assert "--no-cache" in help_text
     assert "--cache-max-age DURATION" in help_text
+    assert "--feed-usage-profile" in help_text
     assert "--check-thresholds" in help_text
     assert "--log-dir PATH" in help_text
     assert "(default: None)" not in help_text
@@ -133,11 +160,14 @@ def test_gen_iprep_help_includes_config_and_cache_options(capsys) -> None:
 
 
 def test_gen_cve_accepts_config_argument() -> None:
-    args = build_parser().parse_args(["gen-cve", "--config", "config.toml", "--output-dir", "out"])
+    args = build_parser().parse_args(
+        ["gen-cve", "--config", "config.toml", "--output-dir", "out", "--feed-usage-profile", "commercial"]
+    )
 
     assert args.command == "gen-cve"
     assert args.config == "config.toml"
     assert args.output_dir == "out"
+    assert args.feed_usage_profile == "commercial"
 
 
 def test_disabled_feed_is_not_passed_to_gen_iprep(tmp_path, monkeypatch) -> None:
@@ -238,6 +268,7 @@ def _write_config(
     *,
     run: dict[str, object] | None = None,
     cache: dict[str, object] | None = None,
+    usage_profile: str | None = None,
     feeds: dict[str, bool] | None = None,
 ) -> None:
     feed_settings = feeds or default_iprep_feed_config()
@@ -249,6 +280,10 @@ def _write_config(
     if cache:
         lines.append("[cache]")
         lines.extend(f"{key} = {_toml_value(value)}" for key, value in cache.items())
+        lines.append("")
+    if usage_profile is not None:
+        lines.append("[feeds]")
+        lines.append(f"usage_profile = {_toml_value(usage_profile)}")
         lines.append("")
     lines.append("[feeds.iprep]")
     lines.extend(f"{feed_id} = {str(enabled).lower()}" for feed_id, enabled in feed_settings.items())
