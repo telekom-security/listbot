@@ -1,0 +1,112 @@
+[run]
+# Directory for generated cve.yaml, iprep.yaml, compressed .bz2 files, and NOTICE.
+output_dir = "."
+
+# Number of concurrent IP reputation feed downloads.
+workers = 8
+
+# HTTP timeout per request in seconds.
+timeout = 30.0
+
+# Emerging Threats Open ruleset version used for the default sid-msg.map URL.
+suricata_version = "8.0.0"
+
+# Optional explicit sid-msg.map URL. Leave commented to use the ET Open URL.
+# cve_url = "https://example.test/sid-msg.map"
+
+[cache]
+# Enable local caching for downloaded feeds and maps.
+enabled = true
+
+# Directory for cached raw downloads and metadata.
+cache_dir = ".cache/listbot"
+
+# Refresh cache entries after this age. Supported suffixes: m, h, d.
+cache_max_age = "6h"
+
+[feeds.iprep]
+# Malware, C2, compromised hosts, and scanner context.
+feodotracker = true
+threatfox_ip_port_recent = true
+neo23x0_c2 = true
+cybercrime_tracker = true
+firehol_webclient = true
+et_compromised = true
+maltrail_mass_scanner = true
+
+# Tor exits and open proxy sources.
+tor_bulk_exit = true
+tor_exit_addresses = true
+firehol_dm_tor = true
+firehol_proxylists = true
+firehol_proxyrss = true
+firehol_proxyspy = true
+firehol_web_proxies = true
+firehol_socks_proxy = true
+firehol_sslproxies = true
+spys = true
+
+# Form spam, web abuse, and enrichment sources.
+firehol_botscout = true
+sblam = true
+firehol_bitcoin = true
+firehol_cruzit = true
+firehol_mwdomainlist = true
+firehol_dshield = true
+firehol_darklist = true
+binary_defense_banlist = true
+
+# blocklist.de via FireHOL. Service-specific feeds run before the aggregate.
+firehol_blocklist_de_apache = true
+firehol_blocklist_de_bots = true
+firehol_blocklist_de_ftp = true
+firehol_blocklist_de_imap = true
+firehol_blocklist_de_mail = true
+firehol_blocklist_de_sip = true
+firehol_blocklist_de_ssh = true
+firehol_blocklist_de = true
+
+# Generic reputation and attack-source feeds.
+cinsscore = true
+greensnow = true
+rutgers = true
+dshield = true
+ipsum_level3 = true
+
+# Project Honey Pot and StopForumSpam mirrors.
+firehol_php_commenters_30d = true
+firehol_php_dictionary_30d = true
+firehol_php_harvesters_30d = true
+firehol_php_spammers_30d = true
+firehol_stopforumspam_30d = true
+firehol_stopforumspam_toxic = true
+
+# Broad abuse/reputation feeds.
+firehol_abusers_30d = true
+firehol_cleantalk = true
+myip = true
+bitwire_outbound = true
+botvrij = true
+alienvault_reputation = true
+turris = true
+
+# Large anonymizer aggregate. Keep this late in feed order; it adds about 2.8M IPs.
+firehol_anonymous = false
+
+[thresholds]
+# Enable minimum count checks. Logging and --min-* CLI options also enable checks.
+enabled = true
+
+# Minimum CVE mappings required when threshold checks are active.
+min_cve = 5000
+
+# Minimum IP reputation mappings required when threshold checks are active.
+min_iprep = 500000
+
+[logging]
+# Enable additive run.log/error.log output. Logging also enables threshold checks.
+# run.log records every logged run; error.log additionally records failed runs.
+enabled = true
+
+# Optional log directory. Leave commented to write logs to output_dir when enabled.
+# dir = "/var/log/listbot"

@@ -2,21 +2,23 @@ from __future__ import annotations
 
 import bz2
 import concurrent.futures
-import os
+import hashlib
+import json
+import re
 import shutil
-import subprocess
 import urllib.error
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .feeds import DEFAULT_SURICATA_VERSION, ET_SID_MAP_URL_TEMPLATE, Feed, IPREP_FEEDS
+from .config import DEFAULT_CACHE_DIR, DEFAULT_CACHE_MAX_AGE, parse_cache_max_age
+from .feeds import CVE_NOTICE, DEFAULT_SURICATA_VERSION, ET_SID_MAP_URL_TEMPLATE, FEED_NOTICES, Feed, IPREP_FEEDS
 from .parsers import decode_payloads, extract_ipv4_indicators, first_cve_reference, iter_lines
 
 USER_AGENT = "curl/8.0"
+NOTICE_FILENAME = "NOTICE"
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,7 @@ class FetchResult:
     payload: bytes | None = None
     final_url: str | None = None
     status: int | None = None
+    retrieved_at: datetime | None = None
     error: str | None = None
 
 
@@ -34,6 +37,8 @@ class FeedStat:
     tag: str
     url: str
     status: str
+    final_url: str | None = None
+    retrieved_at: datetime | None = None
     extracted: int = 0
     added: int = 0
     error: str | None = None
@@ -45,6 +50,22 @@ class BuildResult:
     compressed_output: Path
     count: int
     stats: list[FeedStat] = field(default_factory=list)
+    notice_output: Path | None = None
+
+
+@dataclass(frozen=True)
+class ThresholdResult:
+    name: str
+    actual: int
+    minimum: int
+
+    @property
+    def ok(self) -> bool:
+        return self.actual >= self.minimum
+
+    @property
+    def missing(self) -> int:
+        return max(0, self.minimum - self.actual)
 
 
 def build_iprep_map(
@@ -54,6 +75,10 @@ def build_iprep_map(
     workers: int = 8,
     timeout: float = 30.0,
     progress: Any | None = None,
+    write_notice: bool = True,
+    cache_enabled: bool = True,
+    cache_dir: Path | str = DEFAULT_CACHE_DIR,
+    cache_max_age: str | timedelta = DEFAULT_CACHE_MAX_AGE,
 ) -> BuildResult:
     output_dir.mkdir(parents=True, exist_ok=True)
     mapping: dict[str, str] = {}
@@ -66,6 +91,9 @@ def build_iprep_map(
         timeout=timeout,
         progress=progress,
         progress_task=download_task,
+        cache_enabled=cache_enabled,
+        cache_dir=cache_dir,
+        cache_max_age=cache_max_age,
     )
     parse_task = _add_progress_task(progress, "Parsing IP feeds", len(results))
     for result in results:
@@ -77,6 +105,8 @@ def build_iprep_map(
                     tag=feed.tag,
                     url=feed.url,
                     status="error",
+                    final_url=result.final_url,
+                    retrieved_at=result.retrieved_at,
                     error=result.error or "empty response",
                 )
             )
@@ -105,6 +135,8 @@ def build_iprep_map(
                 tag=feed.tag,
                 url=feed.url,
                 status="ok",
+                final_url=result.final_url,
+                retrieved_at=result.retrieved_at,
                 extracted=len(indicators),
                 added=added,
             )
@@ -114,7 +146,12 @@ def build_iprep_map(
     output = output_dir / "iprep.yaml"
     write_task = _add_progress_task(progress, "Writing iprep.yaml", 2)
     compressed = write_translation_map(mapping, output, progress=progress, progress_task=write_task)
-    return BuildResult(output=output, compressed_output=compressed, count=len(mapping), stats=stats)
+    result = BuildResult(output=output, compressed_output=compressed, count=len(mapping), stats=stats)
+    if write_notice:
+        notice_task = _add_progress_task(progress, f"Writing {NOTICE_FILENAME}", 1)
+        result.notice_output = write_notice_file(output_dir, [result])
+        _advance_progress(progress, notice_task)
+    return result
 
 
 def build_cve_map(
@@ -124,11 +161,22 @@ def build_cve_map(
     suricata_version: str = DEFAULT_SURICATA_VERSION,
     timeout: float = 30.0,
     progress: Any | None = None,
+    write_notice: bool = True,
+    cache_enabled: bool = True,
+    cache_dir: Path | str = DEFAULT_CACHE_DIR,
+    cache_max_age: str | timedelta = DEFAULT_CACHE_MAX_AGE,
 ) -> BuildResult:
     output_dir.mkdir(parents=True, exist_ok=True)
     source_url = url or ET_SID_MAP_URL_TEMPLATE.format(version=suricata_version)
     download_task = _add_progress_task(progress, "Downloading CVE map", 1)
-    payload, final_url, status = fetch_url(source_url, timeout=timeout)
+    payload, final_url, status, retrieved_at = fetch_url(
+        source_url,
+        timeout=timeout,
+        cache_identity="emerging_threats_sid_msg",
+        cache_enabled=cache_enabled,
+        cache_dir=cache_dir,
+        cache_max_age=cache_max_age,
+    )
     _advance_progress(progress, download_task)
     texts = decode_payloads(payload)
     mapping: dict[str, str] = {}
@@ -152,21 +200,32 @@ def build_cve_map(
             tag="cve",
             url=final_url or source_url,
             status=str(status),
+            final_url=final_url,
+            retrieved_at=retrieved_at,
             extracted=len(mapping),
             added=len(mapping),
         )
     ]
-    return BuildResult(output=output, compressed_output=compressed, count=len(mapping), stats=stats)
+    result = BuildResult(output=output, compressed_output=compressed, count=len(mapping), stats=stats)
+    if write_notice:
+        notice_task = _add_progress_task(progress, f"Writing {NOTICE_FILENAME}", 1)
+        result.notice_output = write_notice_file(output_dir, [result])
+        _advance_progress(progress, notice_task)
+    return result
 
 
 def build_all_maps(
     output_dir: Path,
     *,
+    feeds: tuple[Feed, ...] = IPREP_FEEDS,
     workers: int = 8,
     timeout: float = 30.0,
     suricata_version: str = DEFAULT_SURICATA_VERSION,
     cve_url: str | None = None,
     progress: Any | None = None,
+    cache_enabled: bool = True,
+    cache_dir: Path | str = DEFAULT_CACHE_DIR,
+    cache_max_age: str | timedelta = DEFAULT_CACHE_MAX_AGE,
 ) -> tuple[BuildResult, BuildResult]:
     output_dir.mkdir(parents=True, exist_ok=True)
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
@@ -177,66 +236,100 @@ def build_all_maps(
             suricata_version=suricata_version,
             timeout=timeout,
             progress=progress,
+            write_notice=False,
+            cache_enabled=cache_enabled,
+            cache_dir=cache_dir,
+            cache_max_age=cache_max_age,
         )
         iprep_future = executor.submit(
             build_iprep_map,
             output_dir,
+            feeds=feeds,
             workers=workers,
             timeout=timeout,
             progress=progress,
+            write_notice=False,
+            cache_enabled=cache_enabled,
+            cache_dir=cache_dir,
+            cache_max_age=cache_max_age,
         )
-        return cve_future.result(), iprep_future.result()
+        cve_result, iprep_result = cve_future.result(), iprep_future.result()
+
+    notice_task = _add_progress_task(progress, f"Writing {NOTICE_FILENAME}", 1)
+    notice_output = write_notice_file(output_dir, [cve_result, iprep_result])
+    cve_result.notice_output = notice_output
+    iprep_result.notice_output = notice_output
+    _advance_progress(progress, notice_task)
+    return cve_result, iprep_result
 
 
 def run_all(
     output_dir: Path,
     *,
+    feeds: tuple[Feed, ...] = IPREP_FEEDS,
     workers: int = 8,
     timeout: float = 30.0,
     suricata_version: str = DEFAULT_SURICATA_VERSION,
     cve_url: str | None = None,
+    thresholds_enabled: bool = False,
     min_cve: int = 5_000,
     min_iprep: int = 200_000,
-    publish_dir: Path | None = None,
-    git_push: bool = False,
-    git_remote: str = "origin",
-    pushover_token: str | None = None,
-    pushover_user: str | None = None,
+    logging_enabled: bool = False,
     log_dir: Path | None = None,
     progress: Any | None = None,
+    cache_enabled: bool = True,
+    cache_dir: Path | str = DEFAULT_CACHE_DIR,
+    cache_max_age: str | timedelta = DEFAULT_CACHE_MAX_AGE,
 ) -> tuple[BuildResult, BuildResult, str, bool]:
     cve_result, iprep_result = build_all_maps(
         output_dir,
+        feeds=feeds,
         workers=workers,
         timeout=timeout,
         suricata_version=suricata_version,
         cve_url=cve_url,
         progress=progress,
+        cache_enabled=cache_enabled,
+        cache_dir=cache_dir,
+        cache_max_age=cache_max_age,
     )
 
-    ok = cve_result.count > min_cve and iprep_result.count > min_iprep
+    checks_enabled = thresholds_enabled or logging_enabled
+    ok = True
+    threshold_results: tuple[ThresholdResult, ...] = ()
+    if checks_enabled:
+        threshold_results = evaluate_thresholds(
+            cve_result.count,
+            iprep_result.count,
+            min_cve=min_cve,
+            min_iprep=min_iprep,
+        )
+        ok = all(result.ok for result in threshold_results)
     now = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
     state = "OK" if ok else "ERROR"
+    if not checks_enabled:
+        state = "GENERATED"
     message = f"{now}: {cve_result.count} CVE IDs, {iprep_result.count} reps - {state}."
+    if checks_enabled:
+        message = "\n".join([message, *_format_threshold_log_lines(threshold_results)])
 
-    _write_run_log(message, ok=ok, log_dir=log_dir or output_dir)
-
-    if ok and publish_dir is not None:
-        publish_outputs(output_dir, publish_dir)
-        if git_push:
-            commit_and_push(
-                publish_dir,
-                cve_count=cve_result.count,
-                iprep_count=iprep_result.count,
-                remote=git_remote,
-            )
-
-    token = pushover_token or os.environ.get("PUSHOVER_TOKEN")
-    user = pushover_user or os.environ.get("PUSHOVER_USER")
-    if token and user:
-        send_pushover(token, user, message, timeout=timeout)
+    if logging_enabled:
+        _write_run_log(message, ok=ok, log_dir=log_dir or output_dir)
 
     return cve_result, iprep_result, message, ok
+
+
+def evaluate_thresholds(
+    cve_count: int,
+    iprep_count: int,
+    *,
+    min_cve: int,
+    min_iprep: int,
+) -> tuple[ThresholdResult, ThresholdResult]:
+    return (
+        ThresholdResult("CVE map", cve_count, min_cve),
+        ThresholdResult("IP reputation map", iprep_count, min_iprep),
+    )
 
 
 def write_translation_map(
@@ -262,7 +355,107 @@ def write_translation_map(
     return compressed
 
 
-def fetch_url(url: str, *, timeout: float = 30.0) -> tuple[bytes, str, int]:
+def write_notice_file(
+    output_dir: Path,
+    results: list[BuildResult],
+    *,
+    generated_at: datetime | None = None,
+) -> Path:
+    generated_at = generated_at or datetime.now(timezone.utc)
+    output = output_dir / NOTICE_FILENAME
+    tmp_output = output.with_name(f"{output.name}.tmp")
+
+    rows: list[str] = []
+    for result in results:
+        for stat in result.stats:
+            notice = CVE_NOTICE if stat.name == "emerging_threats_sid_msg" else FEED_NOTICES.get(stat.name)
+            source = notice.source if notice is not None else stat.name
+            purpose = notice.purpose if notice is not None else "No purpose metadata available."
+            license_terms = notice.license_terms if notice is not None else "No explicit feed license found."
+            rows.append(
+                "| "
+                + " | ".join(
+                    _markdown_cell(value)
+                    for value in (
+                        result.output.name,
+                        stat.name,
+                        source,
+                        purpose,
+                        stat.url,
+                        stat.final_url or stat.url,
+                        stat.tag,
+                        stat.status,
+                        _format_utc(stat.retrieved_at),
+                        str(stat.extracted),
+                        str(stat.added),
+                        license_terms,
+                    )
+                )
+                + " |"
+            )
+
+    artifacts = sorted({result.output.name for result in results} | {result.compressed_output.name for result in results})
+    with tmp_output.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write("# Third-Party Feed Notice\n\n")
+        handle.write(f"Generated at: {_format_utc(generated_at)}\n")
+        handle.write("\n")
+        handle.write("This file documents third-party feeds used to generate listbot map artifacts.\n")
+        handle.write("The generated YAML maps are derived data from the listed upstream sources.\n")
+        handle.write("listbot does not relicense upstream feed data; upstream license and usage terms continue to apply.\n\n")
+        handle.write("## Generated Artifacts\n\n")
+        for artifact in artifacts:
+            handle.write(f"- {artifact}\n")
+        handle.write("\n")
+        handle.write("## Feed Attribution\n\n")
+        handle.write(
+            "| Artifact | Feed ID | Source | Purpose | Configured URL | Final URL | Tag | Status | "
+            "Retrieved at UTC | Extracted | Added | Upstream license / terms |\n"
+        )
+        handle.write("| --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | --- |\n")
+        for row in rows:
+            handle.write(f"{row}\n")
+
+    tmp_output.replace(output)
+    return output
+
+
+def fetch_url(
+    url: str,
+    *,
+    timeout: float = 30.0,
+    cache_identity: str | None = None,
+    cache_enabled: bool = True,
+    cache_dir: Path | str = DEFAULT_CACHE_DIR,
+    cache_max_age: str | timedelta = DEFAULT_CACHE_MAX_AGE,
+) -> tuple[bytes, str, int, datetime]:
+    if cache_enabled:
+        cached = _read_cached_url(
+            url,
+            cache_identity=cache_identity,
+            cache_dir=Path(cache_dir),
+            cache_max_age=_coerce_cache_max_age(cache_max_age),
+        )
+        if cached is not None:
+            return cached
+
+    payload, final_url, status, retrieved_at = _download_url(url, timeout=timeout)
+    if cache_enabled:
+        try:
+            _write_cached_url(
+                url,
+                payload=payload,
+                final_url=final_url,
+                status=status,
+                retrieved_at=retrieved_at,
+                cache_identity=cache_identity,
+                cache_dir=Path(cache_dir),
+            )
+        except OSError:
+            pass
+    return payload, final_url, status, retrieved_at
+
+
+def _download_url(url: str, *, timeout: float) -> tuple[bytes, str, int, datetime]:
     request = urllib.request.Request(
         url,
         headers={
@@ -271,66 +464,97 @@ def fetch_url(url: str, *, timeout: float = 30.0) -> tuple[bytes, str, int]:
         },
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read(), response.geturl(), response.status
+        payload = response.read()
+        return payload, response.geturl(), response.status, datetime.now(timezone.utc)
 
 
-def publish_outputs(output_dir: Path, publish_dir: Path) -> None:
-    publish_dir.mkdir(parents=True, exist_ok=True)
-    for filename in ("cve.yaml", "cve.yaml.bz2", "iprep.yaml", "iprep.yaml.bz2"):
-        shutil.copy2(output_dir / filename, publish_dir / filename)
-
-
-def commit_and_push(
-    repo_dir: Path,
+def _read_cached_url(
+    url: str,
     *,
-    cve_count: int,
-    iprep_count: int,
-    remote: str = "origin",
+    cache_identity: str | None,
+    cache_dir: Path,
+    cache_max_age: timedelta,
+) -> tuple[bytes, str, int, datetime] | None:
+    payload_path, metadata_path = _cache_paths(cache_dir, cache_identity, url)
+    if not payload_path.exists() or not metadata_path.exists():
+        return None
+
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        retrieved_at = _parse_cached_datetime(metadata["retrieved_at"])
+        status = int(metadata["status"])
+        final_url = str(metadata.get("final_url") or url)
+    except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
+        _delete_cache_entry(payload_path, metadata_path)
+        return None
+
+    if datetime.now(timezone.utc) - retrieved_at > cache_max_age:
+        _delete_cache_entry(payload_path, metadata_path)
+        return None
+
+    try:
+        payload = payload_path.read_bytes()
+    except OSError:
+        _delete_cache_entry(payload_path, metadata_path)
+        return None
+
+    return payload, final_url, status, retrieved_at
+
+
+def _write_cached_url(
+    url: str,
+    *,
+    payload: bytes,
+    final_url: str,
+    status: int,
+    retrieved_at: datetime,
+    cache_identity: str | None,
+    cache_dir: Path,
 ) -> None:
-    subprocess.run(
-        ["git", "add", "-f", "cve.yaml", "cve.yaml.bz2", "iprep.yaml", "iprep.yaml.bz2"],
-        cwd=repo_dir,
-        check=True,
-    )
-    diff = subprocess.run(
-        ["git", "diff", "--cached", "--quiet"],
-        cwd=repo_dir,
-        check=False,
-    )
-    if diff.returncode == 0:
-        return
-    subprocess.run(
-        [
-            "git",
-            "commit",
-            "-m",
-            f"Include {cve_count} CVE IDs, {iprep_count} reputations",
-        ],
-        cwd=repo_dir,
-        check=True,
-    )
-    subprocess.run(["git", "push", remote], cwd=repo_dir, check=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    payload_path, metadata_path = _cache_paths(cache_dir, cache_identity, url)
+    payload_tmp = payload_path.with_name(f"{payload_path.name}.tmp")
+    metadata_tmp = metadata_path.with_name(f"{metadata_path.name}.tmp")
+    metadata = {
+        "identity": cache_identity,
+        "url": url,
+        "final_url": final_url,
+        "status": status,
+        "retrieved_at": _format_utc(retrieved_at),
+    }
+    payload_tmp.write_bytes(payload)
+    metadata_tmp.write_text(json.dumps(metadata, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    payload_tmp.replace(payload_path)
+    metadata_tmp.replace(metadata_path)
 
 
-def send_pushover(token: str, user: str, message: str, *, timeout: float = 30.0) -> None:
-    body = urllib.parse.urlencode(
-        {
-            "token": token,
-            "user": user,
-            "message": message,
-        }
-    ).encode("utf-8")
-    request = urllib.request.Request(
-        "https://api.pushover.net/1/messages.json",
-        data=body,
-        headers={
-            "User-Agent": USER_AGENT,
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        response.read()
+def _cache_paths(cache_dir: Path, cache_identity: str | None, url: str) -> tuple[Path, Path]:
+    identity = cache_identity or "url"
+    safe_identity = re.sub(r"[^A-Za-z0-9_.-]+", "_", identity).strip("._") or "url"
+    digest = hashlib.sha256(f"{identity}\0{url}".encode("utf-8")).hexdigest()[:20]
+    base = cache_dir / f"{safe_identity}-{digest}"
+    return base.with_suffix(".raw"), base.with_suffix(".json")
+
+
+def _delete_cache_entry(payload_path: Path, metadata_path: Path) -> None:
+    for path in (payload_path, metadata_path):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _coerce_cache_max_age(value: str | timedelta) -> timedelta:
+    if isinstance(value, timedelta):
+        return value
+    return parse_cache_max_age(value)
+
+
+def _parse_cached_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _fetch_feeds(
@@ -340,15 +564,31 @@ def _fetch_feeds(
     timeout: float,
     progress: Any | None = None,
     progress_task: Any | None = None,
+    cache_enabled: bool = True,
+    cache_dir: Path | str = DEFAULT_CACHE_DIR,
+    cache_max_age: str | timedelta = DEFAULT_CACHE_MAX_AGE,
 ) -> list[FetchResult]:
     results: list[FetchResult | None] = [None] * len(feeds)
 
     def fetch_one(index: int, feed: Feed) -> tuple[int, FetchResult]:
         try:
-            payload, final_url, status = fetch_url(feed.url, timeout=timeout)
-            return index, FetchResult(feed=feed, payload=payload, final_url=final_url, status=status)
+            payload, final_url, status, retrieved_at = fetch_url(
+                feed.url,
+                timeout=timeout,
+                cache_identity=feed.name,
+                cache_enabled=cache_enabled,
+                cache_dir=cache_dir,
+                cache_max_age=cache_max_age,
+            )
+            return index, FetchResult(
+                feed=feed,
+                payload=payload,
+                final_url=final_url,
+                status=status,
+                retrieved_at=retrieved_at,
+            )
         except (OSError, urllib.error.URLError, urllib.error.HTTPError) as exc:
-            return index, FetchResult(feed=feed, error=str(exc))
+            return index, FetchResult(feed=feed, retrieved_at=datetime.now(timezone.utc), error=str(exc))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
         futures = [executor.submit(fetch_one, index, feed) for index, feed in enumerate(feeds)]
@@ -373,10 +613,43 @@ def _advance_progress(progress: Any | None, task_id: Any | None, advance: int = 
 
 def _write_run_log(message: str, *, ok: bool, log_dir: Path) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
-    filename = "run.log" if ok else "error.log"
-    with (log_dir / filename).open("a", encoding="utf-8") as handle:
+    _append_log_entry(log_dir / "run.log", message)
+    if not ok:
+        _append_log_entry(log_dir / "error.log", message)
+
+
+def _append_log_entry(path: Path, message: str) -> None:
+    needs_separator = path.exists() and path.stat().st_size > 0
+    with path.open("a", encoding="utf-8") as handle:
+        if needs_separator:
+            handle.write("\n")
         handle.write(f"{message}\n")
+
+
+def _format_threshold_log_lines(results: tuple[ThresholdResult, ...]) -> list[str]:
+    failed = [result for result in results if not result.ok]
+    header = "Threshold check failed:" if failed else "Threshold check passed:"
+    lines = [header]
+    for result in results:
+        comparator = ">=" if result.ok else "<"
+        line = f"- {result.name}: {result.actual:,} {comparator} {result.minimum:,}"
+        if result.ok:
+            line += " OK"
+        else:
+            line += f" FAIL, missing {result.missing:,}"
+        lines.append(line)
+    return lines
 
 
 def _yaml_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _format_utc(value: datetime | None) -> str:
+    if value is None:
+        return "unknown"
+    return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _markdown_cell(value: object) -> str:
+    return str(value).replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ")

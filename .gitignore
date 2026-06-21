@@ -1,4 +1,5 @@
 .venv/
+.cache/
 __pycache__/
 .pytest_cache/
 *.pyc
@@ -7,4 +8,5 @@ __pycache__/
 *.yaml
 *.yaml.bz2
 *.log
+NOTICE
 sid-msg.map
