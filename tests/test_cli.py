@@ -52,7 +52,7 @@ def test_run_auto_loads_config_toml(tmp_path, monkeypatch) -> None:
 
     config = _config_from_args(args)
 
-    assert config.output_dir == "from-config"
+    assert config.run.output_dir == "from-config"
 
 
 def test_gen_commands_auto_load_config_toml(tmp_path, monkeypatch) -> None:
@@ -67,13 +67,13 @@ def test_gen_commands_auto_load_config_toml(tmp_path, monkeypatch) -> None:
     iprep_config = _config_from_args(build_parser().parse_args(["gen-iprep"]))
     cve_config = _config_from_args(build_parser().parse_args(["gen-cve"]))
 
-    assert iprep_config.output_dir == "from-config"
-    assert iprep_config.timeout == 12.0
-    assert iprep_config.cache_enabled is False
-    assert iprep_config.feed_usage_profile == "commercial"
-    assert cve_config.output_dir == "from-config"
-    assert cve_config.suricata_version == "8.0.0"
-    assert cve_config.feed_usage_profile == "commercial"
+    assert iprep_config.run.output_dir == "from-config"
+    assert iprep_config.run.timeout == 12.0
+    assert iprep_config.cache.enabled is False
+    assert iprep_config.feeds.usage_profile == "commercial"
+    assert cve_config.run.output_dir == "from-config"
+    assert cve_config.run.suricata_version == "8.0.0"
+    assert cve_config.feeds.usage_profile == "commercial"
 
 
 def test_cli_feed_usage_profile_overrides_config(tmp_path, monkeypatch) -> None:
@@ -82,7 +82,7 @@ def test_cli_feed_usage_profile_overrides_config(tmp_path, monkeypatch) -> None:
 
     config = _config_from_args(build_parser().parse_args(["gen-iprep", "--feed-usage-profile", "commercial"]))
 
-    assert config.feed_usage_profile == "commercial"
+    assert config.feeds.usage_profile == "commercial"
 
 
 def test_run_does_not_auto_load_listbot_toml(tmp_path, monkeypatch) -> None:
@@ -92,7 +92,7 @@ def test_run_does_not_auto_load_listbot_toml(tmp_path, monkeypatch) -> None:
 
     config = _config_from_args(args)
 
-    assert config.output_dir == "."
+    assert config.run.output_dir == "."
 
 
 def test_gen_all_command_is_removed() -> None:

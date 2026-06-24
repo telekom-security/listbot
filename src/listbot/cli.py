@@ -46,14 +46,14 @@ def main(argv: list[str] | None = None) -> int:
             settings = _config_from_args(args)
             with _progress(console) as progress:
                 result = build_iprep_map(
-                    Path(settings.output_dir),
+                    Path(settings.run.output_dir),
                     feeds=enabled_iprep_feeds(settings),
-                    workers=settings.workers,
-                    timeout=settings.timeout,
+                    workers=settings.run.workers,
+                    timeout=settings.run.timeout,
                     progress=progress,
-                    cache_enabled=settings.cache_enabled,
-                    cache_dir=Path(settings.cache_dir),
-                    cache_max_age=settings.cache_max_age,
+                    cache_enabled=settings.cache.enabled,
+                    cache_dir=Path(settings.cache.dir),
+                    cache_max_age=settings.cache.max_age,
                 )
             _print_iprep_summary(console, result)
             return 0
@@ -62,14 +62,14 @@ def main(argv: list[str] | None = None) -> int:
             settings = _config_from_args(args)
             with _progress(console) as progress:
                 result = build_cve_map(
-                    Path(settings.output_dir),
-                    url=settings.cve_url,
-                    suricata_version=settings.suricata_version,
-                    timeout=settings.timeout,
+                    Path(settings.run.output_dir),
+                    url=settings.run.cve_url,
+                    suricata_version=settings.run.suricata_version,
+                    timeout=settings.run.timeout,
                     progress=progress,
-                    cache_enabled=settings.cache_enabled,
-                    cache_dir=Path(settings.cache_dir),
-                    cache_max_age=settings.cache_max_age,
+                    cache_enabled=settings.cache.enabled,
+                    cache_dir=Path(settings.cache.dir),
+                    cache_max_age=settings.cache.max_age,
                 )
             _print_cve_summary(console, result)
             return 0
@@ -78,30 +78,30 @@ def main(argv: list[str] | None = None) -> int:
             settings = _config_from_args(args)
             with _progress(console) as progress:
                 cve_result, iprep_result, message, ok = run_all(
-                    Path(settings.output_dir),
+                    Path(settings.run.output_dir),
                     feeds=enabled_iprep_feeds(settings),
-                    workers=settings.workers,
-                    timeout=settings.timeout,
-                    suricata_version=settings.suricata_version,
-                    cve_url=settings.cve_url,
-                    thresholds_enabled=settings.thresholds_enabled,
-                    min_cve=settings.min_cve,
-                    min_iprep=settings.min_iprep,
-                    logging_enabled=settings.logging_enabled,
-                    log_dir=Path(settings.log_dir) if settings.log_dir else None,
+                    workers=settings.run.workers,
+                    timeout=settings.run.timeout,
+                    suricata_version=settings.run.suricata_version,
+                    cve_url=settings.run.cve_url,
+                    thresholds_enabled=settings.thresholds.enabled,
+                    min_cve=settings.thresholds.min_cve,
+                    min_iprep=settings.thresholds.min_iprep,
+                    logging_enabled=settings.logging.enabled,
+                    log_dir=Path(settings.logging.dir) if settings.logging.dir else None,
                     progress=progress,
-                    cache_enabled=settings.cache_enabled,
-                    cache_dir=Path(settings.cache_dir),
-                    cache_max_age=settings.cache_max_age,
+                    cache_enabled=settings.cache.enabled,
+                    cache_dir=Path(settings.cache.dir),
+                    cache_max_age=settings.cache.max_age,
                 )
             console.print(_panel(message, title="Run Status", style="cyan" if ok else "red"))
-            if settings.thresholds_enabled:
+            if settings.thresholds.enabled:
                 _print_threshold_summary(
                     console,
                     cve_result.count,
                     iprep_result.count,
-                    min_cve=settings.min_cve,
-                    min_iprep=settings.min_iprep,
+                    min_cve=settings.thresholds.min_cve,
+                    min_iprep=settings.thresholds.min_iprep,
                 )
             _print_cve_summary(console, cve_result)
             _print_iprep_summary(console, iprep_result)
@@ -176,19 +176,18 @@ def build_parser() -> argparse.ArgumentParser:
         "run",
         help="Generate cve.yaml, iprep.yaml, and NOTICE",
         description=(
-            "Generate both maps and NOTICE in one output directory. By default this only writes artifacts; "
-            "threshold checks and logs are enabled explicitly by config or CLI options. If ./config.toml "
-            "exists, it is loaded automatically."
+            "Generate both maps and NOTICE in one output directory. Threshold checks and logging follow "
+            "config; the shipped defaults enable both. If ./config.toml exists, it is loaded automatically."
         ),
         epilog=(
             "Config precedence: CLI > --config/./config.toml > built-in defaults.\n"
             "Cache is enabled by default. Cache ages use m, h, or d suffixes, for example 30m, 6h, 2d.\n"
             "Expired cache entries are deleted before a fresh download is attempted.\n"
-            "Logging enables threshold checks. --min-cve and --min-iprep also enable threshold checks.\n\n"
+            "Logging also enables threshold checks. --min-cve and --min-iprep also enable threshold checks.\n\n"
             "Examples:\n"
             "  listbot run --output-dir /var/lib/listbot\n"
             "  listbot run --config config.toml --output-dir /var/lib/listbot\n"
-            "  listbot run --output-dir /var/lib/listbot --check-thresholds --min-iprep 200000\n"
+            "  listbot run --output-dir /var/lib/listbot --check-thresholds --min-iprep 500000\n"
             "  listbot run --output-dir /var/lib/listbot --log-dir /var/log/listbot"
         ),
         formatter_class=ListbotHelpFormatter,
@@ -305,7 +304,7 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
         "--min-iprep",
         metavar="N",
         type=int,
-        help="Minimum IP reputation mappings for a successful checked run; also enables checks (default: config or 200000)",
+        help="Minimum IP reputation mappings for a successful checked run; also enables checks (default: config or 500000)",
     )
 
     logging = parser.add_argument_group("logging")
