@@ -260,12 +260,12 @@ firehol_stopforumspam_30d = true
 firehol_anonymous = true
 
 [thresholds]
-enabled = false
+enabled = true
 min_cve = 5000
 min_iprep = 500000
 
 [logging]
-enabled = false
+enabled = true
 # dir = "/var/log/listbot"
 ```
 

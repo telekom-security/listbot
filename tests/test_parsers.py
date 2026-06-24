@@ -45,6 +45,29 @@ def test_dshield_parser_falls_back_to_generic_when_no_ranges_exist() -> None:
     assert extract_ipv4_indicators("plain 8.8.8.8", parser="dshield") == {"8.8.8.8"}
 
 
+def test_dshield_parser_does_not_fall_back_when_range_lines_are_invalid() -> None:
+    text = "8.8.8.1\t8.8.8.2\tnot-a-count\n"
+
+    assert extract_ipv4_indicators(text, parser="dshield") == set()
+
+
+def test_dshield_parser_does_not_fall_back_when_ranges_are_too_large() -> None:
+    text = "8.8.8.0\t8.8.8.255\t30\n"
+
+    assert extract_ipv4_indicators(text, parser="dshield", max_range_hosts=2) == set()
+
+
+def test_extract_dshield_ranges_filters_interior_non_global_addresses() -> None:
+    text = "198.51.99.255\t198.51.101.0\t1\n"
+
+    indicators = extract_dshield_ranges(text, max_range_hosts=300)
+
+    assert "198.51.99.255" in indicators
+    assert "198.51.101.0" in indicators
+    assert "198.51.100.1" not in indicators
+    assert not any(indicator.startswith("198.51.100.") for indicator in indicators)
+
+
 def test_decode_payloads_supports_plain_gzip_and_zip() -> None:
     assert decode_payloads(b"1.2.3.4\n") == ["1.2.3.4\n"]
     assert decode_payloads(gzip.compress(b"5.6.7.8\n")) == ["5.6.7.8\n"]

@@ -28,20 +28,10 @@ from .feeds import DEFAULT_SURICATA_VERSION
 from .generators import BuildResult, build_cve_map, build_iprep_map, evaluate_thresholds, run_all
 
 
-class ListbotHelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+class ListbotHelpFormatter(argparse.RawDescriptionHelpFormatter):
     def __init__(self, *args, **kwargs):
         kwargs.setdefault("max_help_position", 34)
         super().__init__(*args, **kwargs)
-
-    def _get_help_string(self, action: argparse.Action) -> str:
-        help_text = action.help or ""
-        if "%(default)" in help_text:
-            return help_text
-        if not action.option_strings:
-            return help_text
-        if action.default is argparse.SUPPRESS or action.default is None:
-            return help_text
-        return f"{help_text} (default: %(default)s)"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -127,9 +117,6 @@ def main(argv: list[str] | None = None) -> int:
         Console(stderr=True).print(f"[bold red]ERROR:[/bold red] {exc}")
         return 1
 
-    parser.print_help()
-    return 2
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -159,9 +146,9 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=ListbotHelpFormatter,
     )
     _add_config_arg(iprep)
-    _add_output_arg(iprep, uses_config=True)
-    _add_network_args(iprep, uses_config=True)
-    _add_cache_args(iprep, uses_config=True)
+    _add_output_arg(iprep)
+    _add_network_args(iprep)
+    _add_cache_args(iprep)
 
     cve = subparsers.add_parser(
         "gen-cve",
@@ -175,15 +162,15 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=ListbotHelpFormatter,
     )
     _add_config_arg(cve)
-    _add_output_arg(cve, uses_config=True)
-    _add_cve_args(cve, uses_config=True)
+    _add_output_arg(cve)
+    _add_cve_args(cve)
     cve.add_argument(
         "--timeout",
         metavar="SECONDS",
         type=float,
         help="HTTP timeout in seconds (default: config or 30.0)",
     )
-    _add_cache_args(cve, uses_config=True)
+    _add_cache_args(cve)
 
     run = subparsers.add_parser(
         "run",
@@ -226,58 +213,42 @@ def _add_config_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_output_arg(parser: argparse.ArgumentParser, *, uses_config: bool) -> None:
+def _add_output_arg(parser: argparse.ArgumentParser) -> None:
     output = parser.add_argument_group("output")
-    help_text = "Directory for generated YAML, bz2, and NOTICE files"
-    if uses_config:
-        help_text += " (default: config or '.')"
     output.add_argument(
         "--output-dir",
         metavar="PATH",
-        default=None if uses_config else ".",
-        help=help_text,
+        help="Directory for generated YAML, bz2, and NOTICE files (default: config or '.')",
     )
 
 
-def _add_network_args(parser: argparse.ArgumentParser, *, uses_config: bool) -> None:
+def _add_network_args(parser: argparse.ArgumentParser) -> None:
     network = parser.add_argument_group("network")
-    workers_help = "Concurrent IP feed downloads"
-    timeout_help = "HTTP timeout in seconds"
-    if uses_config:
-        workers_help += " (default: config or 8)"
-        timeout_help += " (default: config or 30.0)"
-    network.add_argument("--workers", metavar="N", type=int, default=None if uses_config else 8, help=workers_help)
+    network.add_argument(
+        "--workers",
+        metavar="N",
+        type=int,
+        help="Concurrent IP feed downloads (default: config or 8)",
+    )
     network.add_argument(
         "--timeout",
         metavar="SECONDS",
         type=float,
-        default=None if uses_config else 30.0,
-        help=timeout_help,
+        help="HTTP timeout in seconds (default: config or 30.0)",
     )
 
 
-def _add_cve_args(parser: argparse.ArgumentParser, *, uses_config: bool) -> None:
+def _add_cve_args(parser: argparse.ArgumentParser) -> None:
     cve = parser.add_argument_group("cve source")
-    version_help = "Emerging Threats Open Suricata ruleset version"
-    cve_url_help = "Override URL for sid-msg.map"
-    if uses_config:
-        version_help += f" (default: config or {DEFAULT_SURICATA_VERSION})"
-        cve_url_help += " (default: config or ET Open URL)"
     cve.add_argument(
         "--suricata-version",
         metavar="VERSION",
-        default=None if uses_config else DEFAULT_SURICATA_VERSION,
-        help=version_help,
+        help=f"Emerging Threats Open Suricata ruleset version (default: config or {DEFAULT_SURICATA_VERSION})",
     )
-    cve.add_argument("--cve-url", metavar="URL", help=cve_url_help)
+    cve.add_argument("--cve-url", metavar="URL", help="Override URL for sid-msg.map (default: config or ET Open URL)")
 
 
-def _add_cache_args(parser: argparse.ArgumentParser, *, uses_config: bool) -> None:
-    cache_dir_help = "Directory for cached raw downloads and metadata"
-    cache_max_age_help = "Refresh cache entries after this age; supported suffixes: m, h, d"
-    if uses_config:
-        cache_dir_help += f" (default: config or {DEFAULT_CACHE_DIR})"
-        cache_max_age_help += f" (default: config or {DEFAULT_CACHE_MAX_AGE})"
+def _add_cache_args(parser: argparse.ArgumentParser) -> None:
     cache = parser.add_argument_group("cache")
     cache_switch = cache.add_mutually_exclusive_group()
     cache_switch.add_argument(
@@ -297,41 +268,25 @@ def _add_cache_args(parser: argparse.ArgumentParser, *, uses_config: bool) -> No
     cache.add_argument(
         "--cache-dir",
         metavar="PATH",
-        default=None if uses_config else DEFAULT_CACHE_DIR,
-        help=cache_dir_help,
+        help=f"Directory for cached raw downloads and metadata (default: config or {DEFAULT_CACHE_DIR})",
     )
     cache.add_argument(
         "--cache-max-age",
         metavar="DURATION",
         type=_cache_max_age_arg,
-        default=None if uses_config else DEFAULT_CACHE_MAX_AGE,
-        help=cache_max_age_help,
+        help=(
+            "Refresh cache entries after this age; supported suffixes: m, h, d "
+            f"(default: config or {DEFAULT_CACHE_MAX_AGE})"
+        ),
     )
 
 
 def _add_run_args(parser: argparse.ArgumentParser) -> None:
     _add_config_arg(parser)
-
-    output = parser.add_argument_group("output")
-    output.add_argument(
-        "--output-dir",
-        metavar="PATH",
-        help="Directory for generated YAML, bz2, and NOTICE files (default: config or '.')",
-    )
-
-    network = parser.add_argument_group("network")
-    network.add_argument("--workers", metavar="N", type=int, help="Concurrent IP feed downloads (default: config or 8)")
-    network.add_argument("--timeout", metavar="SECONDS", type=float, help="HTTP timeout in seconds (default: config or 30.0)")
-
-    cve = parser.add_argument_group("cve source")
-    cve.add_argument(
-        "--suricata-version",
-        metavar="VERSION",
-        help=f"Emerging Threats Open Suricata ruleset version (default: config or {DEFAULT_SURICATA_VERSION})",
-    )
-    cve.add_argument("--cve-url", metavar="URL", help="Override URL for sid-msg.map (default: config or ET Open URL)")
-
-    _add_cache_args(parser, uses_config=True)
+    _add_output_arg(parser)
+    _add_network_args(parser)
+    _add_cve_args(parser)
+    _add_cache_args(parser)
 
     thresholds = parser.add_argument_group("threshold checks")
     thresholds.add_argument(
@@ -382,14 +337,6 @@ def _config_from_args(args: argparse.Namespace) -> RunConfig:
         cache_max_age=getattr(args, "cache_max_age", None),
         feed_usage_profile=getattr(args, "feed_usage_profile", None),
     )
-
-
-def _run_config_from_args(args: argparse.Namespace) -> RunConfig:
-    return _config_from_args(args)
-
-
-def _cache_enabled_from_args(args: argparse.Namespace) -> bool:
-    return True if args.cache_enabled is None else args.cache_enabled
 
 
 def _cache_max_age_arg(value: str) -> str:

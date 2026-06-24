@@ -26,7 +26,6 @@ class FetchResult:
     feed: Feed
     payload: bytes | None = None
     final_url: str | None = None
-    status: int | None = None
     retrieved_at: datetime | None = None
     error: str | None = None
 
@@ -169,27 +168,37 @@ def build_cve_map(
     output_dir.mkdir(parents=True, exist_ok=True)
     source_url = url or ET_SID_MAP_URL_TEMPLATE.format(version=suricata_version)
     download_task = _add_progress_task(progress, "Downloading CVE map", 1)
-    payload, final_url, status, retrieved_at = fetch_url(
-        source_url,
-        timeout=timeout,
-        cache_identity="emerging_threats_sid_msg",
-        cache_enabled=cache_enabled,
-        cache_dir=cache_dir,
-        cache_max_age=cache_max_age,
-    )
-    _advance_progress(progress, download_task)
-    texts = decode_payloads(payload)
     mapping: dict[str, str] = {}
+    final_url: str | None = None
+    status_text = "error"
+    retrieved_at = datetime.now(timezone.utc)
+    error: str | None = None
 
-    parse_task = _add_progress_task(progress, "Parsing CVE map", 1)
-    for line in iter_lines(texts):
-        cve = first_cve_reference(line)
-        if cve is None:
-            continue
-        sid = line.split(maxsplit=1)[0]
-        if sid.isdigit():
-            mapping.setdefault(sid, cve)
-    _advance_progress(progress, parse_task)
+    try:
+        payload, final_url, status, retrieved_at = fetch_url(
+            source_url,
+            timeout=timeout,
+            cache_identity="emerging_threats_sid_msg",
+            cache_enabled=cache_enabled,
+            cache_dir=cache_dir,
+            cache_max_age=cache_max_age,
+        )
+        status_text = str(status)
+        texts = decode_payloads(payload)
+        _advance_progress(progress, download_task)
+
+        parse_task = _add_progress_task(progress, "Parsing CVE map", 1)
+        for line in iter_lines(texts):
+            cve = first_cve_reference(line)
+            if cve is None:
+                continue
+            sid = line.split(maxsplit=1)[0]
+            if sid.isdigit():
+                mapping.setdefault(sid, cve)
+        _advance_progress(progress, parse_task)
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError) as exc:
+        error = str(exc)
+        _advance_progress(progress, download_task)
 
     output = output_dir / "cve.yaml"
     write_task = _add_progress_task(progress, "Writing cve.yaml", 2)
@@ -198,12 +207,13 @@ def build_cve_map(
         FeedStat(
             name="emerging_threats_sid_msg",
             tag="cve",
-            url=final_url or source_url,
-            status=str(status),
+            url=source_url,
+            status=status_text,
             final_url=final_url,
             retrieved_at=retrieved_at,
             extracted=len(mapping),
             added=len(mapping),
+            error=error,
         )
     ]
     result = BuildResult(output=output, compressed_output=compressed, count=len(mapping), stats=stats)
@@ -532,8 +542,8 @@ def _cache_paths(cache_dir: Path, cache_identity: str | None, url: str) -> tuple
     identity = cache_identity or "url"
     safe_identity = re.sub(r"[^A-Za-z0-9_.-]+", "_", identity).strip("._") or "url"
     digest = hashlib.sha256(f"{identity}\0{url}".encode("utf-8")).hexdigest()[:20]
-    base = cache_dir / f"{safe_identity}-{digest}"
-    return base.with_suffix(".raw"), base.with_suffix(".json")
+    base = f"{safe_identity}-{digest}"
+    return cache_dir / f"{base}.raw", cache_dir / f"{base}.json"
 
 
 def _delete_cache_entry(payload_path: Path, metadata_path: Path) -> None:
@@ -572,7 +582,7 @@ def _fetch_feeds(
 
     def fetch_one(index: int, feed: Feed) -> tuple[int, FetchResult]:
         try:
-            payload, final_url, status, retrieved_at = fetch_url(
+            payload, final_url, _status, retrieved_at = fetch_url(
                 feed.url,
                 timeout=timeout,
                 cache_identity=feed.name,
@@ -584,7 +594,6 @@ def _fetch_feeds(
                 feed=feed,
                 payload=payload,
                 final_url=final_url,
-                status=status,
                 retrieved_at=retrieved_at,
             )
         except (OSError, urllib.error.URLError, urllib.error.HTTPError) as exc:
@@ -642,7 +651,24 @@ def _format_threshold_log_lines(results: tuple[ThresholdResult, ...]) -> list[st
 
 
 def _yaml_escape(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
+    escaped: list[str] = []
+    for char in value:
+        codepoint = ord(char)
+        if char == "\\":
+            escaped.append("\\\\")
+        elif char == '"':
+            escaped.append('\\"')
+        elif char == "\n":
+            escaped.append("\\n")
+        elif char == "\r":
+            escaped.append("\\r")
+        elif char == "\t":
+            escaped.append("\\t")
+        elif codepoint < 0x20 or codepoint == 0x7F:
+            escaped.append(f"\\x{codepoint:02x}")
+        else:
+            escaped.append(char)
+    return "".join(escaped)
 
 
 def _format_utc(value: datetime | None) -> str:
