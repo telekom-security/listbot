@@ -181,7 +181,7 @@ def test_fetch_url_uses_valid_cache(tmp_path, monkeypatch) -> None:
         calls += 1
         return _FakeResponse(b"fresh", "https://example.test/feed.txt", 200)
 
-    monkeypatch.setattr(generators.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(generators, "_open_url", fake_urlopen)
     first = fetch_url(
         "https://example.test/feed.txt",
         cache_identity="feed",
@@ -207,7 +207,7 @@ def test_fetch_url_deletes_expired_cache_before_refresh(tmp_path, monkeypatch) -
         return _FakeResponse(payloads.pop(), "https://example.test/feed.txt", 200)
 
     cache_dir = tmp_path / "cache"
-    monkeypatch.setattr(generators.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(generators, "_open_url", fake_urlopen)
     assert fetch_url("https://example.test/feed.txt", cache_identity="feed", cache_dir=cache_dir)[0] == b"old"
     _age_cache_entry(cache_dir, "2000-01-01T00:00:00Z")
 
@@ -219,14 +219,14 @@ def test_fetch_url_does_not_use_stale_cache_after_refresh_failure(tmp_path, monk
         return _FakeResponse(b"old", "https://example.test/feed.txt", 200)
 
     cache_dir = tmp_path / "cache"
-    monkeypatch.setattr(generators.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(generators, "_open_url", fake_urlopen)
     assert fetch_url("https://example.test/feed.txt", cache_identity="feed", cache_dir=cache_dir)[0] == b"old"
     _age_cache_entry(cache_dir, "2000-01-01T00:00:00Z")
 
     def failing_urlopen(_request, timeout):
         raise urllib.error.URLError("offline")
 
-    monkeypatch.setattr(generators.urllib.request, "urlopen", failing_urlopen)
+    monkeypatch.setattr(generators, "_open_url", failing_urlopen)
     with pytest.raises(urllib.error.URLError):
         fetch_url("https://example.test/feed.txt", cache_identity="feed", cache_dir=cache_dir)
 
@@ -247,7 +247,7 @@ def test_fetch_url_recovers_from_corrupt_cache_metadata(tmp_path, monkeypatch) -
         calls += 1
         return _FakeResponse(b"fresh", "https://example.test/feed.txt", 200)
 
-    monkeypatch.setattr(generators.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(generators, "_open_url", fake_urlopen)
 
     payload, _final_url, _status, _retrieved_at = fetch_url(
         "https://example.test/feed.txt",

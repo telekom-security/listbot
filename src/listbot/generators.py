@@ -3,6 +3,7 @@ from __future__ import annotations
 import bz2
 import concurrent.futures
 import hashlib
+import http.cookiejar
 import json
 import re
 import shutil
@@ -465,6 +466,16 @@ def fetch_url(
     return payload, final_url, status, retrieved_at
 
 
+def _open_url(request: urllib.request.Request, timeout: float) -> Any:
+    # Some feeds sit behind a cookie challenge: the first request is redirected to a
+    # token URL that sets a cookie and redirects back. Without a cookie jar those
+    # redirects loop forever. The jar is per call, so feeds never share cookies.
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+    )
+    return opener.open(request, timeout=timeout)
+
+
 def _download_url(url: str, *, timeout: float) -> tuple[bytes, str, int, datetime]:
     request = urllib.request.Request(
         url,
@@ -473,7 +484,7 @@ def _download_url(url: str, *, timeout: float) -> tuple[bytes, str, int, datetim
             "Accept": "*/*",
         },
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with _open_url(request, timeout) as response:
         payload = response.read()
         return payload, response.geturl(), response.status, datetime.now(timezone.utc)
 
