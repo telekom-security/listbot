@@ -4,7 +4,7 @@ import pytest
 from rich.console import Console
 
 import listbot.cli as cli_module
-from listbot.cli import _config_from_args, _print_iprep_summary, _print_threshold_summary, _run_config_from_args, build_parser
+from listbot.cli import _config_from_args, _print_iprep_summary, _print_threshold_summary, build_parser
 from listbot.config import default_iprep_feed_config
 from listbot.generators import BuildResult, FeedStat
 
@@ -50,9 +50,9 @@ def test_run_auto_loads_config_toml(tmp_path, monkeypatch) -> None:
     _write_config(tmp_path / "config.toml", run={"output_dir": "from-config"})
     args = build_parser().parse_args(["run"])
 
-    config = _run_config_from_args(args)
+    config = _config_from_args(args)
 
-    assert config.output_dir == "from-config"
+    assert config.run.output_dir == "from-config"
 
 
 def test_gen_commands_auto_load_config_toml(tmp_path, monkeypatch) -> None:
@@ -67,13 +67,13 @@ def test_gen_commands_auto_load_config_toml(tmp_path, monkeypatch) -> None:
     iprep_config = _config_from_args(build_parser().parse_args(["gen-iprep"]))
     cve_config = _config_from_args(build_parser().parse_args(["gen-cve"]))
 
-    assert iprep_config.output_dir == "from-config"
-    assert iprep_config.timeout == 12.0
-    assert iprep_config.cache_enabled is False
-    assert iprep_config.feed_usage_profile == "commercial"
-    assert cve_config.output_dir == "from-config"
-    assert cve_config.suricata_version == "8.0.0"
-    assert cve_config.feed_usage_profile == "commercial"
+    assert iprep_config.run.output_dir == "from-config"
+    assert iprep_config.run.timeout == 12.0
+    assert iprep_config.cache.enabled is False
+    assert iprep_config.feeds.usage_profile == "commercial"
+    assert cve_config.run.output_dir == "from-config"
+    assert cve_config.run.suricata_version == "8.0.0"
+    assert cve_config.feeds.usage_profile == "commercial"
 
 
 def test_cli_feed_usage_profile_overrides_config(tmp_path, monkeypatch) -> None:
@@ -82,7 +82,7 @@ def test_cli_feed_usage_profile_overrides_config(tmp_path, monkeypatch) -> None:
 
     config = _config_from_args(build_parser().parse_args(["gen-iprep", "--feed-usage-profile", "commercial"]))
 
-    assert config.feed_usage_profile == "commercial"
+    assert config.feeds.usage_profile == "commercial"
 
 
 def test_run_does_not_auto_load_listbot_toml(tmp_path, monkeypatch) -> None:
@@ -90,9 +90,9 @@ def test_run_does_not_auto_load_listbot_toml(tmp_path, monkeypatch) -> None:
     (tmp_path / "listbot.toml").write_text("[run]\noutput_dir = \"ignored\"\n", encoding="utf-8")
     args = build_parser().parse_args(["run"])
 
-    config = _run_config_from_args(args)
+    config = _config_from_args(args)
 
-    assert config.output_dir == "."
+    assert config.run.output_dir == "."
 
 
 def test_gen_all_command_is_removed() -> None:
@@ -204,6 +204,24 @@ def test_disabled_feed_is_not_passed_to_run(tmp_path, monkeypatch) -> None:
 
     assert cli_module.main(["run", "--config", str(config_path), "--output-dir", str(tmp_path / "out")]) == 0
     assert "feodotracker" not in {feed.name for feed in captured["feeds"]}
+
+
+def test_main_returns_1_when_run_thresholds_fail(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    captured = {}
+
+    def fake_run_all(output_dir, **kwargs):
+        captured["thresholds_enabled"] = kwargs["thresholds_enabled"]
+        cve = BuildResult(output=output_dir / "cve.yaml", compressed_output=output_dir / "cve.yaml.bz2", count=0)
+        iprep = BuildResult(output=output_dir / "iprep.yaml", compressed_output=output_dir / "iprep.yaml.bz2", count=1)
+        return cve, iprep, "threshold failure", False
+
+    monkeypatch.setattr(cli_module, "run_all", fake_run_all)
+
+    exit_code = cli_module.main(["run", "--output-dir", str(tmp_path / "out"), "--check-thresholds"])
+
+    assert exit_code == 1
+    assert captured["thresholds_enabled"] is True
 
 
 def test_threshold_summary_highlights_failed_minimums() -> None:

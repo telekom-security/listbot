@@ -37,7 +37,7 @@ def extract_ipv4_indicators(
 ) -> set[str]:
     if parser == "dshield":
         ranged = extract_dshield_ranges(text, max_range_hosts=max_range_hosts)
-        if ranged:
+        if ranged or _has_dshield_range_lines(text):
             return ranged
 
     return extract_generic_ipv4s(text, max_network_hosts=max_network_hosts)
@@ -75,12 +75,7 @@ def extract_generic_ipv4s(text: str, *, max_network_hosts: int = 65_536) -> set[
 def extract_dshield_ranges(text: str, *, max_range_hosts: int = 65_536) -> set[str]:
     indicators: set[str] = set()
     for line in text.splitlines():
-        if not line or line.startswith("#"):
-            continue
-
-        columns = line.split("\t")
-        if len(columns) < 3:
-            columns = line.split()
+        columns = _dshield_columns(line)
         if len(columns) < 3 or not columns[2].isdigit():
             continue
 
@@ -98,7 +93,11 @@ def extract_dshield_ranges(text: str, *, max_range_hosts: int = 65_536) -> set[s
         if size > max_range_hosts:
             continue
 
-        indicators.update(str(ipaddress.ip_address(value)) for value in range(start_int, end_int + 1))
+        indicators.update(
+            str(ip)
+            for value in range(start_int, end_int + 1)
+            if _is_public_ipv4(ip := ipaddress.ip_address(value))
+        )
 
     return indicators
 
@@ -137,6 +136,33 @@ def _parse_ip(value: str) -> ipaddress.IPv4Address | None:
     if not isinstance(ip, ipaddress.IPv4Address):
         return None
     return ip if _is_public_ipv4(ip) else None
+
+
+def _has_dshield_range_lines(text: str) -> bool:
+    for line in text.splitlines():
+        columns = _dshield_columns(line)
+        if len(columns) < 2:
+            continue
+        if _parse_any_ipv4(columns[0]) is not None and _parse_any_ipv4(columns[1]) is not None:
+            return True
+    return False
+
+
+def _dshield_columns(line: str) -> list[str]:
+    if not line or line.startswith("#"):
+        return []
+    columns = line.split("\t")
+    if len(columns) < 3:
+        columns = line.split()
+    return columns
+
+
+def _parse_any_ipv4(value: str) -> ipaddress.IPv4Address | None:
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return None
+    return ip if isinstance(ip, ipaddress.IPv4Address) else None
 
 
 def _parse_network(value: str) -> ipaddress.IPv4Network | None:

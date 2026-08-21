@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import re
 import tomllib
-from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from .feeds import DEFAULT_SURICATA_VERSION, Feed, IPREP_FEEDS
 
@@ -15,6 +16,7 @@ DEFAULT_CACHE_MAX_AGE = "6h"
 _DURATION_RE = re.compile(r"^([1-9][0-9]*)([mhd])$")
 _IPREP_FEED_IDS = tuple(feed.name for feed in IPREP_FEEDS)
 VALID_FEED_USAGE_PROFILES = frozenset({"all", "commercial", "non-commercial"})
+FeedUsageProfile = Literal["all", "commercial", "non-commercial"]
 
 
 class ConfigError(ValueError):
@@ -25,62 +27,85 @@ def default_iprep_feed_config() -> dict[str, bool]:
     return {feed_id: True for feed_id in _IPREP_FEED_IDS}
 
 
-@dataclass(frozen=True)
-class RunConfig:
+class _ConfigModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, validate_default=True)
+
+
+class _RunSection(_ConfigModel):
     output_dir: str = "."
     workers: int = 8
     timeout: float = 30.0
     suricata_version: str = DEFAULT_SURICATA_VERSION
     cve_url: str | None = None
-    thresholds_enabled: bool = False
+
+
+class _CacheSection(_ConfigModel):
+    enabled: bool = True
+    dir: str = Field(default=DEFAULT_CACHE_DIR, validation_alias="cache_dir")
+    max_age: str = Field(default=DEFAULT_CACHE_MAX_AGE, validation_alias="cache_max_age")
+
+    @field_validator("max_age")
+    @classmethod
+    def _validate_max_age(cls, value: str) -> str:
+        parse_cache_max_age(value)
+        return value
+
+
+class _ThresholdsSection(_ConfigModel):
+    enabled: bool = True
     min_cve: int = 5_000
-    min_iprep: int = 200_000
-    logging_enabled: bool = False
-    log_dir: str | None = None
-    cache_enabled: bool = True
-    cache_dir: str = DEFAULT_CACHE_DIR
-    cache_max_age: str = DEFAULT_CACHE_MAX_AGE
-    feed_usage_profile: str = "all"
-    iprep_feeds: dict[str, bool] = field(default_factory=default_iprep_feed_config)
+    min_iprep: int = 500_000
+
+
+class _LoggingSection(_ConfigModel):
+    enabled: bool = True
+    dir: str | None = None
+
+
+class _FeedsSection(_ConfigModel):
+    usage_profile: FeedUsageProfile = "all"
+    iprep: dict[str, bool] = Field(default_factory=default_iprep_feed_config)
+
+    @field_validator("iprep")
+    @classmethod
+    def _validate_iprep(cls, value: dict[str, bool]) -> dict[str, bool]:
+        allowed = set(_IPREP_FEED_IDS)
+        unknown = sorted(set(value) - allowed)
+        if unknown:
+            raise ValueError(f"Unknown key(s) in feeds.iprep: {', '.join(unknown)}")
+
+        missing = sorted(allowed - set(value))
+        if missing:
+            raise ValueError(f"Missing key(s) in feeds.iprep: {', '.join(missing)}")
+
+        return {feed_id: value[feed_id] for feed_id in _IPREP_FEED_IDS}
+
+
+class RunConfig(_ConfigModel):
+    run: _RunSection = Field(default_factory=_RunSection)
+    cache: _CacheSection = Field(default_factory=_CacheSection)
+    thresholds: _ThresholdsSection = Field(default_factory=_ThresholdsSection)
+    logging: _LoggingSection = Field(default_factory=_LoggingSection)
+    feeds: _FeedsSection = Field(default_factory=_FeedsSection)
 
 
 def load_run_config(path: Path) -> RunConfig:
     try:
         with path.open("rb") as handle:
             data = tomllib.load(handle)
-    except tomllib.TOMLDecodeError as exc:
-        raise ConfigError(f"Invalid TOML config {path}: {exc}") from exc
     except OSError as exc:
         raise ConfigError(f"Could not read config {path}: {exc}") from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"Invalid TOML config {path}: {exc}") from exc
 
     return parse_run_config(data)
 
 
 def parse_run_config(data: dict[str, Any]) -> RunConfig:
-    _reject_unknown("config", data, {"run", "thresholds", "logging", "cache", "feeds"})
-    run = _section(data, "run", {"output_dir", "workers", "timeout", "suricata_version", "cve_url"})
-    thresholds = _section(data, "thresholds", {"enabled", "min_cve", "min_iprep"})
-    logging = _section(data, "logging", {"enabled", "dir"})
-    cache = _section(data, "cache", {"enabled", "cache_dir", "cache_max_age"})
-    feeds = _section(data, "feeds", {"usage_profile", "iprep"})
-
-    return RunConfig(
-        output_dir=_str(run, "output_dir", "."),
-        workers=_int(run, "workers", 8),
-        timeout=_float(run, "timeout", 30.0),
-        suricata_version=_str(run, "suricata_version", DEFAULT_SURICATA_VERSION),
-        cve_url=_optional_str(run, "cve_url"),
-        thresholds_enabled=_bool(thresholds, "enabled", False),
-        min_cve=_int(thresholds, "min_cve", 5_000),
-        min_iprep=_int(thresholds, "min_iprep", 200_000),
-        logging_enabled=_bool(logging, "enabled", False),
-        log_dir=_optional_str(logging, "dir"),
-        cache_enabled=_bool(cache, "enabled", True),
-        cache_dir=_str(cache, "cache_dir", DEFAULT_CACHE_DIR),
-        cache_max_age=_duration_str(cache, "cache_max_age", DEFAULT_CACHE_MAX_AGE),
-        feed_usage_profile=_feed_usage_profile(feeds),
-        iprep_feeds=_iprep_feed_config(feeds),
-    )
+    try:
+        return RunConfig.model_validate(data, strict=True)
+    except ValidationError as exc:
+        raise ConfigError(str(exc)) from exc
 
 
 def merge_run_config(
@@ -101,9 +126,9 @@ def merge_run_config(
     cache_max_age: str | None = None,
     feed_usage_profile: str | None = None,
 ) -> RunConfig:
-    thresholds_enabled = config.thresholds_enabled
-    logging_enabled = config.logging_enabled
-    effective_log_dir = config.log_dir
+    thresholds_enabled = config.thresholds.enabled
+    logging_enabled = config.logging.enabled
+    effective_log_dir = config.logging.dir
 
     if check_thresholds:
         thresholds_enabled = True
@@ -116,26 +141,35 @@ def merge_run_config(
         logging_enabled = False
         effective_log_dir = None
 
-    return RunConfig(
-        output_dir=output_dir if output_dir is not None else config.output_dir,
-        workers=workers if workers is not None else config.workers,
-        timeout=timeout if timeout is not None else config.timeout,
-        suricata_version=suricata_version if suricata_version is not None else config.suricata_version,
-        cve_url=cve_url if cve_url is not None else config.cve_url,
-        thresholds_enabled=thresholds_enabled or logging_enabled,
-        min_cve=min_cve if min_cve is not None else config.min_cve,
-        min_iprep=min_iprep if min_iprep is not None else config.min_iprep,
-        logging_enabled=logging_enabled,
-        log_dir=effective_log_dir,
-        cache_enabled=cache_enabled if cache_enabled is not None else config.cache_enabled,
-        cache_dir=cache_dir if cache_dir is not None else config.cache_dir,
-        cache_max_age=_validate_duration(cache_max_age) if cache_max_age is not None else config.cache_max_age,
-        feed_usage_profile=(
-            _validate_feed_usage_profile(feed_usage_profile)
-            if feed_usage_profile is not None
-            else config.feed_usage_profile
-        ),
-        iprep_feeds=dict(config.iprep_feeds),
+    return parse_run_config(
+        {
+            "run": {
+                "output_dir": output_dir if output_dir is not None else config.run.output_dir,
+                "workers": workers if workers is not None else config.run.workers,
+                "timeout": timeout if timeout is not None else config.run.timeout,
+                "suricata_version": (
+                    suricata_version if suricata_version is not None else config.run.suricata_version
+                ),
+                "cve_url": cve_url if cve_url is not None else config.run.cve_url,
+            },
+            "cache": {
+                "enabled": cache_enabled if cache_enabled is not None else config.cache.enabled,
+                "cache_dir": cache_dir if cache_dir is not None else config.cache.dir,
+                "cache_max_age": cache_max_age if cache_max_age is not None else config.cache.max_age,
+            },
+            "thresholds": {
+                "enabled": thresholds_enabled or logging_enabled,
+                "min_cve": min_cve if min_cve is not None else config.thresholds.min_cve,
+                "min_iprep": min_iprep if min_iprep is not None else config.thresholds.min_iprep,
+            },
+            "logging": {"enabled": logging_enabled, "dir": effective_log_dir},
+            "feeds": {
+                "usage_profile": (
+                    feed_usage_profile if feed_usage_profile is not None else config.feeds.usage_profile
+                ),
+                "iprep": dict(config.feeds.iprep),
+            },
+        }
     )
 
 
@@ -143,7 +177,7 @@ def enabled_iprep_feeds(config: RunConfig) -> tuple[Feed, ...]:
     return tuple(
         feed
         for feed in IPREP_FEEDS
-        if config.iprep_feeds[feed.name] and _feed_matches_usage_profile(feed, config.feed_usage_profile)
+        if config.feeds.iprep[feed.name] and _feed_matches_usage_profile(feed, config.feeds.usage_profile)
     )
 
 
@@ -161,105 +195,9 @@ def parse_cache_max_age(value: str) -> timedelta:
     return timedelta(days=amount)
 
 
-def _section(data: dict[str, Any], name: str, allowed_keys: set[str]) -> dict[str, Any]:
-    value = data.get(name, {})
-    if not isinstance(value, dict):
-        raise ConfigError(f"Config section [{name}] must be a table")
-    _reject_unknown(name, value, allowed_keys)
-    return value
-
-
-def _iprep_feed_config(feeds: dict[str, Any]) -> dict[str, bool]:
-    if "iprep" not in feeds:
-        raise ConfigError("Config section [feeds.iprep] is required")
-
-    iprep = feeds["iprep"]
-    if not isinstance(iprep, dict):
-        raise ConfigError("Config section [feeds.iprep] must be a table")
-
-    allowed = set(_IPREP_FEED_IDS)
-    _reject_unknown("feeds.iprep", iprep, allowed)
-    missing = sorted(allowed - set(iprep))
-    if missing:
-        keys = ", ".join(missing)
-        raise ConfigError(f"Missing key(s) in feeds.iprep: {keys}")
-
-    values: dict[str, bool] = {}
-    for feed_id in _IPREP_FEED_IDS:
-        value = iprep[feed_id]
-        if not isinstance(value, bool):
-            raise ConfigError(f"Config value feeds.iprep.{feed_id} must be a boolean")
-        values[feed_id] = value
-    return values
-
-
-def _feed_usage_profile(feeds: dict[str, Any]) -> str:
-    return _validate_feed_usage_profile(_str(feeds, "usage_profile", "all"))
-
-
-def _validate_feed_usage_profile(value: str) -> str:
-    if value not in VALID_FEED_USAGE_PROFILES:
-        allowed = ", ".join(sorted(VALID_FEED_USAGE_PROFILES))
-        raise ConfigError(f"Config value usage_profile must be one of: {allowed}")
-    return value
-
-
 def _feed_matches_usage_profile(feed: Feed, profile: str) -> bool:
     if profile == "all":
         return True
     if profile == "commercial":
         return feed.usage_class == "unrestricted"
     return feed.usage_class in {"unrestricted", "non_commercial"}
-
-
-def _reject_unknown(section: str, data: dict[str, Any], allowed_keys: set[str]) -> None:
-    unknown = sorted(set(data) - allowed_keys)
-    if unknown:
-        keys = ", ".join(unknown)
-        raise ConfigError(f"Unknown key(s) in {section}: {keys}")
-
-
-def _str(section: dict[str, Any], key: str, default: str) -> str:
-    value = section.get(key, default)
-    if not isinstance(value, str):
-        raise ConfigError(f"Config value {key} must be a string")
-    return value
-
-
-def _duration_str(section: dict[str, Any], key: str, default: str) -> str:
-    return _validate_duration(_str(section, key, default))
-
-
-def _validate_duration(value: str) -> str:
-    parse_cache_max_age(value)
-    return value
-
-
-def _optional_str(section: dict[str, Any], key: str) -> str | None:
-    value = section.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ConfigError(f"Config value {key} must be a string")
-    return value
-
-
-def _int(section: dict[str, Any], key: str, default: int) -> int:
-    value = section.get(key, default)
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ConfigError(f"Config value {key} must be an integer")
-    return value
-
-
-def _float(section: dict[str, Any], key: str, default: float) -> float:
-    value = section.get(key, default)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ConfigError(f"Config value {key} must be a number")
-    return float(value)
-
-
-def _bool(section: dict[str, Any], key: str, default: bool) -> bool:
-    value = section.get(key, default)
-    if not isinstance(value, bool):
-        raise ConfigError(f"Config value {key} must be a boolean")
-    return value

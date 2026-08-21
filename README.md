@@ -10,13 +10,17 @@ security enrichment jobs:
 - `cve.yaml`: Emerging Threats SID to CVE/CAN lookup data
 - `iprep.yaml`: IPv4 reputation data from public OSINT feeds
 
-Each map is also written as a bzip2-compressed copy, so the default result is:
+Each map is also written as a bzip2-compressed copy, so the generated map
+artifact set is:
 
 - `cve.yaml`
 - `cve.yaml.bz2`
 - `iprep.yaml`
 - `iprep.yaml.bz2`
 - `NOTICE`
+
+When logging is enabled, `run` also writes `run.log`; failed logged runs are
+also appended to `error.log`.
 
 The project used to be shell-heavy. It now runs as a Python CLI managed by
 Astral `uv`, with native parsers for text, CSV-like files, gzip, zip, CIDR
@@ -152,8 +156,8 @@ LISTBOT_UID="$(id -u)" LISTBOT_GID="$(id -g)" docker compose build
 ### `run`
 
 Builds `cve.yaml`, `iprep.yaml`, their compressed `.bz2` copies, and `NOTICE`
-in one command. This is the normal command for local use and scheduled
-generation.
+in one command. With the shipped defaults it also performs threshold checks and
+writes logs. This is the normal command for local use and scheduled generation.
 
 ```bash
 listbot run --output-dir /var/lib/listbot
@@ -172,7 +176,7 @@ Useful options:
 - `--feed-usage-profile all|commercial|non-commercial`: filter IPREP feeds by usage profile
 - `--check-thresholds`: enable minimum count checks
 - `--min-cve 5000`: minimum CVE mappings for a checked run
-- `--min-iprep 200000`: minimum IP reputation mappings for a checked run
+- `--min-iprep 500000`: minimum IP reputation mappings for a checked run
 - `--log-dir PATH`: write `run.log` or `error.log` and enable checks
 - `--no-log`: disable logging configured in `--config`
 
@@ -212,15 +216,16 @@ The parser validates IPv4 addresses with Python's `ipaddress` module and only
 writes globally routable IPv4 addresses. This avoids false matches from comments
 or version-like strings in feed metadata.
 
-By default, `run` only generates artifacts. Threshold checks and logs are
-disabled unless they are enabled by config or CLI options. A checked run passes
-when each generated count reaches at least its configured minimum. Default
-thresholds when checks are active:
+By default, `run` uses threshold checks and logging because both the built-in
+defaults and the shipped `config.toml` enable them. A checked run passes when
+each generated count reaches at least its configured minimum. Default thresholds:
 
 - CVE mappings: at least `5000`
-- IP reputation mappings: at least `200000`
+- IP reputation mappings: at least `500000`
 
-Override them with `--min-cve` and `--min-iprep`.
+Override them with `--min-cve` and `--min-iprep`. For artifact-only runs, set
+`[thresholds].enabled = false` and `[logging].enabled = false` in a config file.
+`--no-log` disables configured logging, but threshold checks can still be active.
 
 `listbot` does not publish, push, or notify by itself. External jobs can watch
 or copy `--output-dir` when they need to move artifacts into another system.
@@ -260,12 +265,12 @@ firehol_stopforumspam_30d = true
 firehol_anonymous = true
 
 [thresholds]
-enabled = false
+enabled = true
 min_cve = 5000
 min_iprep = 500000
 
 [logging]
-enabled = false
+enabled = true
 # dir = "/var/log/listbot"
 ```
 
@@ -276,7 +281,7 @@ fresh download. There is no stale fallback: if the refresh fails, the feed is
 handled like any other failed download. Cache durations must be positive values
 with `m`, `h`, or `d` suffixes, for example `30m`, `6h`, or `2d`.
 
-Logging enables threshold checks. If `logging.dir` is omitted, logs are written
+Logging also enables threshold checks. If `logging.dir` is omitted, logs are written
 to `output_dir`. `run.log` is an additive history of all logged runs; failed
 runs are also appended to `error.log`. Threshold failures are shown as a
 dedicated Rich panel and logged with actual count, configured minimum, and

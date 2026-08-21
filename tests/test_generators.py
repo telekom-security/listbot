@@ -8,12 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from listbot.feeds import APPROVED_FEED_USAGE_CLASSES, APPROVED_IPREP_TAGS, FEED_NOTICES, IPREP_FEEDS
+from listbot.feeds import APPROVED_FEED_USAGE_CLASSES, APPROVED_IPREP_TAGS, FEED_NOTICES, Feed, IPREP_FEEDS
 from listbot import generators
 from listbot.generators import (
     BuildResult,
     FeedStat,
     USER_AGENT,
+    build_iprep_map,
     evaluate_thresholds,
     fetch_url,
     run_all,
@@ -153,6 +154,25 @@ def test_write_translation_map_uses_legacy_scalar_format(tmp_path) -> None:
     assert bz2.decompress(compressed.read_bytes()).decode("utf-8") == expected
 
 
+def test_write_translation_map_escapes_control_characters(tmp_path) -> None:
+    output = tmp_path / "sample.yaml"
+
+    write_translation_map(
+        {
+            "key\nwith\tcontrol": 'value\r\x01quote"backslash\\',
+        },
+        output,
+    )
+
+    text = output.read_text(encoding="utf-8")
+    assert text.count("\n") == 1
+    assert "\t" not in text
+    assert "\r" not in text
+    assert "\x01" not in text
+    assert '"key\\nwith\\tcontrol":' in text
+    assert 'value\\r\\x01quote\\"backslash\\\\' in text
+
+
 def test_fetch_url_uses_valid_cache(tmp_path, monkeypatch) -> None:
     calls = 0
 
@@ -212,6 +232,116 @@ def test_fetch_url_does_not_use_stale_cache_after_refresh_failure(tmp_path, monk
 
     assert not list(cache_dir.glob("*.raw"))
     assert not list(cache_dir.glob("*.json"))
+
+
+def test_fetch_url_recovers_from_corrupt_cache_metadata(tmp_path, monkeypatch) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    payload_path, metadata_path = generators._cache_paths(cache_dir, "feed", "https://example.test/feed.txt")
+    payload_path.write_bytes(b"cached")
+    metadata_path.write_text("{not json", encoding="utf-8")
+    calls = 0
+
+    def fake_urlopen(_request, timeout):
+        nonlocal calls
+        calls += 1
+        return _FakeResponse(b"fresh", "https://example.test/feed.txt", 200)
+
+    monkeypatch.setattr(generators.urllib.request, "urlopen", fake_urlopen)
+
+    payload, _final_url, _status, _retrieved_at = fetch_url(
+        "https://example.test/feed.txt",
+        cache_identity="feed",
+        cache_dir=cache_dir,
+        cache_max_age="1d",
+    )
+
+    assert payload == b"fresh"
+    assert calls == 1
+    assert payload_path.read_bytes() == b"fresh"
+    assert json.loads(metadata_path.read_text(encoding="utf-8"))["status"] == 200
+
+
+def test_cache_paths_preserve_dotted_identity_and_digest() -> None:
+    raw_path, metadata_path = generators._cache_paths(
+        Path("cache"),
+        "blocklist.de",
+        "https://example.test/feed.txt",
+    )
+
+    assert raw_path.name.startswith("blocklist.de-")
+    assert raw_path.name.endswith(".raw")
+    assert metadata_path.name == f"{raw_path.stem}.json"
+
+
+def test_build_iprep_map_aggregates_in_feed_order_and_records_errors(tmp_path, monkeypatch) -> None:
+    now = datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc)
+    feeds = (
+        Feed("first", "https://example.test/first.txt", "bad reputation"),
+        Feed("second", "https://example.test/second.txt", "malware infra"),
+        Feed("failed", "https://example.test/failed.txt", "attack source"),
+    )
+
+    def fake_fetch_url(url, **kwargs):
+        if kwargs["cache_identity"] == "failed":
+            raise urllib.error.URLError("offline")
+        payloads = {
+            "first": b"8.8.8.8\n1.1.1.1\n",
+            "second": b"8.8.8.8\n9.9.9.9\n",
+        }
+        return payloads[kwargs["cache_identity"]], url, 200, now
+
+    monkeypatch.setattr(generators, "fetch_url", fake_fetch_url)
+
+    result = build_iprep_map(tmp_path, feeds=feeds, workers=3, cache_enabled=False)
+
+    assert result.count == 3
+    assert result.output.read_text(encoding="utf-8") == (
+        '"1.1.1.1": "bad reputation"\n'
+        '"8.8.8.8": "bad reputation"\n'
+        '"9.9.9.9": "malware infra"\n'
+    )
+    assert [(stat.name, stat.extracted, stat.added, stat.status) for stat in result.stats] == [
+        ("first", 2, 2, "ok"),
+        ("second", 2, 1, "ok"),
+        ("failed", 0, 0, "error"),
+    ]
+    assert result.stats[-1].error is not None
+
+
+def test_run_all_continues_when_cve_download_fails(tmp_path, monkeypatch) -> None:
+    now = datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc)
+    feeds = (Feed("ip_feed", "https://example.test/ip.txt", "bad reputation"),)
+
+    def fake_fetch_url(url, **kwargs):
+        if kwargs["cache_identity"] == "emerging_threats_sid_msg":
+            raise urllib.error.URLError("cve down")
+        return b"8.8.8.8\n", url, 200, now
+
+    monkeypatch.setattr(generators, "fetch_url", fake_fetch_url)
+
+    cve, iprep, message, ok = run_all(
+        tmp_path,
+        feeds=feeds,
+        thresholds_enabled=True,
+        min_cve=1,
+        min_iprep=1,
+        cache_enabled=False,
+    )
+
+    assert ok is False
+    assert "CVE map: 0 < 1 FAIL" in message
+    assert cve.count == 0
+    assert cve.stats[0].status == "error"
+    assert cve.stats[0].error is not None
+    assert cve.output.exists()
+    assert cve.output.read_text(encoding="utf-8") == ""
+    assert iprep.count == 1
+    assert iprep.stats[0].status == "ok"
+    assert cve.notice_output == iprep.notice_output == tmp_path / "NOTICE"
+    notice = (tmp_path / "NOTICE").read_text(encoding="utf-8")
+    assert "| cve.yaml | emerging_threats_sid_msg |" in notice
+    assert "| iprep.yaml | ip_feed |" in notice
 
 
 def test_write_notice_file_documents_feed_attribution(tmp_path) -> None:

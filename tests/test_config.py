@@ -33,39 +33,51 @@ def test_parse_run_config_reads_toml_schema() -> None:
         )
     )
 
-    assert config.output_dir == "/tmp/listbot"
-    assert config.workers == 4
-    assert config.timeout == 12.5
-    assert config.cve_url == "https://example.test/sid-msg.map"
-    assert config.thresholds_enabled is True
-    assert config.min_cve == 7000
-    assert config.min_iprep == 300000
-    assert config.logging_enabled is True
-    assert config.log_dir == "/var/log/listbot"
-    assert config.cache_enabled is True
-    assert config.cache_dir == "/var/cache/listbot"
-    assert config.cache_max_age == "2d"
-    assert config.feed_usage_profile == "all"
-    assert config.iprep_feeds == default_iprep_feed_config()
+    assert config.run.output_dir == "/tmp/listbot"
+    assert config.run.workers == 4
+    assert config.run.timeout == 12.5
+    assert config.run.cve_url == "https://example.test/sid-msg.map"
+    assert config.thresholds.enabled is True
+    assert config.thresholds.min_cve == 7000
+    assert config.thresholds.min_iprep == 300000
+    assert config.logging.enabled is True
+    assert config.logging.dir == "/var/log/listbot"
+    assert config.cache.enabled is True
+    assert config.cache.dir == "/var/cache/listbot"
+    assert config.cache.max_age == "2d"
+    assert config.feeds.usage_profile == "all"
+    assert config.feeds.iprep == default_iprep_feed_config()
 
 
 def test_default_run_config_enables_cache() -> None:
     config = RunConfig()
 
-    assert config.cache_enabled is True
-    assert config.cache_dir == ".cache/listbot"
-    assert config.cache_max_age == "6h"
+    assert config.run.output_dir == "."
+    assert config.run.workers == 8
+    assert config.run.timeout == 30.0
+    assert config.cache.enabled is True
+    assert config.cache.dir == ".cache/listbot"
+    assert config.cache.max_age == "6h"
+    assert config.feeds.usage_profile == "all"
+    assert config.feeds.iprep == default_iprep_feed_config()
+
+
+def test_run_config_is_frozen() -> None:
+    config = RunConfig()
+
+    with pytest.raises(Exception, match="frozen"):
+        config.run.output_dir = "changed"  # type: ignore[misc]
 
 
 def test_cache_can_be_disabled_in_config() -> None:
     config = parse_run_config(_config_data("cache", {"enabled": False}))
 
-    assert config.cache_enabled is False
+    assert config.cache.enabled is False
 
 
 def test_cli_values_override_config() -> None:
     config = merge_run_config(
-        RunConfig(output_dir="from-config", workers=2, thresholds_enabled=False),
+        parse_run_config(_config_data(run={"output_dir": "from-config", "workers": 2}, thresholds={"enabled": False})),
         output_dir="from-cli",
         workers=9,
         check_thresholds=True,
@@ -75,32 +87,32 @@ def test_cli_values_override_config() -> None:
         cache_max_age="30m",
     )
 
-    assert config.output_dir == "from-cli"
-    assert config.workers == 9
-    assert config.thresholds_enabled is True
-    assert config.min_iprep == 42
-    assert config.cache_enabled is False
-    assert config.cache_dir == "from-cli-cache"
-    assert config.cache_max_age == "30m"
+    assert config.run.output_dir == "from-cli"
+    assert config.run.workers == 9
+    assert config.thresholds.enabled is True
+    assert config.thresholds.min_iprep == 42
+    assert config.cache.enabled is False
+    assert config.cache.dir == "from-cli-cache"
+    assert config.cache.max_age == "30m"
 
 
 def test_no_log_disables_configured_logging() -> None:
     config = merge_run_config(
-        RunConfig(logging_enabled=True, log_dir="/var/log/listbot"),
+        parse_run_config(_config_data(logging={"enabled": True, "dir": "/var/log/listbot"})),
         no_log=True,
     )
 
-    assert config.logging_enabled is False
-    assert config.log_dir is None
+    assert config.logging.enabled is False
+    assert config.logging.dir is None
 
 
 def test_unknown_config_keys_are_rejected() -> None:
-    with pytest.raises(ConfigError, match="Unknown key"):
+    with pytest.raises(ConfigError, match="Extra inputs"):
         parse_run_config(_config_data("publish", {"dir": "out"}))
 
 
 def test_unknown_cache_keys_are_rejected() -> None:
-    with pytest.raises(ConfigError, match="Unknown key"):
+    with pytest.raises(ConfigError, match="Extra inputs"):
         parse_run_config(_config_data("cache", {"dir": ".cache/listbot"}))
 
 
@@ -124,8 +136,30 @@ def test_iprep_feed_config_values_must_be_boolean() -> None:
     feeds = default_iprep_feed_config()
     feeds["feodotracker"] = "yes"
 
-    with pytest.raises(ConfigError, match="feeds.iprep.feodotracker must be a boolean"):
+    with pytest.raises(ConfigError, match="valid boolean"):
         parse_run_config(_config_data("feeds", {"iprep": feeds}))
+
+
+@pytest.mark.parametrize(
+    ("section", "values", "match"),
+    [
+        ("run", {"workers": "4"}, "valid integer"),
+        ("thresholds", {"min_cve": True}, "valid integer"),
+        ("cache", {"enabled": "true"}, "valid boolean"),
+        ("run", {"timeout": "12.5"}, "valid number"),
+        ("run", {"timeout": True}, "valid number"),
+        ("run", {"output_dir": 12}, "valid string"),
+        ("cache", {"cache_max_age": 6}, "valid string"),
+    ],
+)
+def test_config_rejects_type_coercion(section: str, values: dict[str, object], match: str) -> None:
+    with pytest.raises(ConfigError, match=match):
+        parse_run_config(_config_data(section, values))
+
+
+def test_config_rejects_invalid_cache_max_age() -> None:
+    with pytest.raises(ConfigError, match="positive duration"):
+        parse_run_config(_config_data("cache", {"cache_max_age": "0h"}))
 
 
 def test_disabled_iprep_feed_is_not_selected() -> None:
@@ -140,11 +174,11 @@ def test_disabled_iprep_feed_is_not_selected() -> None:
 def test_valid_feed_usage_profiles_are_accepted(profile: str) -> None:
     config = parse_run_config(_config_data("feeds", {"usage_profile": profile, "iprep": default_iprep_feed_config()}))
 
-    assert config.feed_usage_profile == profile
+    assert config.feeds.usage_profile == profile
 
 
 def test_invalid_feed_usage_profile_is_rejected() -> None:
-    with pytest.raises(ConfigError, match="usage_profile must be one of"):
+    with pytest.raises(ConfigError, match="Input should be 'all'"):
         parse_run_config(
             _config_data("feeds", {"usage_profile": "enterprise", "iprep": default_iprep_feed_config()})
         )
@@ -223,8 +257,8 @@ def test_load_run_config_reads_file(tmp_path) -> None:
     )
 
     config = load_run_config(config_path)
-    assert config.output_dir == "out"
-    assert config.feed_usage_profile == "commercial"
+    assert config.run.output_dir == "out"
+    assert config.feeds.usage_profile == "commercial"
 
 
 def _config_data(section: str | None = None, values: object | None = None, **sections: object) -> dict[str, object]:
