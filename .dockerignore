@@ -1,0 +1,15 @@
+.git/
+.venv/
+.cache/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.raw
+*.tmp
+*.yaml
+*.yaml.bz2
+*.log
+NOTICE
+sid-msg.map
+output/*
+!output/.gitkeep
