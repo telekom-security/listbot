@@ -359,7 +359,7 @@ IPREP_FEEDS: tuple[Feed, ...] = (
     ),
     Feed(
         "maltrail_mass_scanner",
-        "https://raw.githubusercontent.com/stamparm/maltrail/master/trails/static/mass_scanner.txt",
+        "https://raw.githubusercontent.com/stamparm/maltrail/master/data/mass_scanner.txt",
         "mass scanner",
         usage_class="unrestricted",
     ),
