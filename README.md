@@ -259,6 +259,44 @@ Useful options:
 - `--log-dir PATH`: write `run.log` or `error.log` and enable checks
 - `--no-log`: disable logging configured in `--config`
 
+#### Scheduling with cron
+
+cron starts jobs with a minimal environment (`PATH=/usr/bin:/bin`), and a
+script run by cron does not read shell profiles such as `.bashrc` or
+`.profile`. If `uv` was installed with the official installer, it lives in
+`~/.local/bin` and is not found. cron discards the resulting
+`uv: command not found` unless a mail server is configured, so the run fails
+silently and no listbot logs are written.
+
+Use a small wrapper script that sets up the environment:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+source "$HOME/.local/bin/env"
+cd /opt/listbot
+uv run listbot run >> /var/log/listbot-cron.log 2>&1
+```
+
+- `$HOME/.local/bin/env` is created by the uv installer and adds `uv` to
+  `PATH`. cron sets `HOME` for the job user.
+- If `uv` was installed differently (package manager, pipx), use its absolute
+  path from `command -v uv` instead of the `source` line.
+- `set -euo pipefail` stops the script if `cd` or `source` fails.
+- The redirect keeps errors that happen before listbot writes its own logs.
+
+Make the script executable and schedule it, for example in `/etc/crontab`:
+
+```text
+40 10 * * *  root  /opt/listbot/listbot-cron.sh
+```
+
+To test the script with an environment similar to cron's:
+
+```bash
+env -i HOME=/root PATH=/usr/bin:/bin /opt/listbot/listbot-cron.sh; echo "exit=$?"
+```
+
 ### `gen-cve`
 
 Builds only the CVE map:
