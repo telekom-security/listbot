@@ -25,11 +25,14 @@ COPY src ./src
 
 RUN uv sync --frozen --no-dev --python 3.14 \
     && uv cache clean \
-    && chown -R listbot:listbot /config /data /cache
+    && chown -R "${LISTBOT_UID}:0" /config /data /cache \
+    && chmod -R g=u /config /data /cache
 
-COPY --chown=listbot:listbot config.toml /config/listbot.toml
+COPY --chown=${LISTBOT_UID}:0 config.toml /config/listbot.toml
 
-USER listbot
+# Numeric so Kubernetes runAsNonRoot can verify it. Writable dirs are owned by
+# group 0 as well, so pods running with an arbitrary UID in group 0 still work.
+USER ${LISTBOT_UID}:${LISTBOT_GID}
 
 ENTRYPOINT ["listbot"]
 CMD ["run", "--config", "/config/listbot.toml", "--output-dir", "/data", "--cache-dir", "/cache/listbot"]

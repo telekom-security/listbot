@@ -143,13 +143,89 @@ bind-mounted host directories, so `down -v` does not delete those directories or
 their generated files. It only removes Docker-managed resources created by
 Compose.
 
-The image runs as UID/GID `1000` by default so bind-mounted output files are
-usable on typical Linux developer machines. Build with explicit IDs if your
-host user differs:
+The image runs as the numeric user `1000:1000` by default so bind-mounted
+output files are usable on typical Linux developer machines. Build with
+explicit IDs if your host user differs:
 
 ```bash
 LISTBOT_UID="$(id -u)" LISTBOT_GID="$(id -g)" docker compose build
 ```
+
+`/config`, `/data`, and `/cache` are also owned by group `0` with group write
+access, so the image works when a platform assigns an arbitrary UID in group
+`0` (for example OpenShift). At runtime listbot only writes to the output,
+cache, and optional `bz2_dir` directories, so a read-only root filesystem works
+when those paths are volumes.
+
+### Option 4: Kubernetes
+
+The image sets a numeric user, so `runAsNonRoot: true` can be verified. Create
+a ConfigMap from the complete `config.toml` (a loaded config must list every
+IPREP feed):
+
+```bash
+kubectl create configmap listbot-config --from-file=listbot.toml=config.toml
+```
+
+Example CronJob using the image's default command (`run` with `/data` and
+`/cache/listbot`):
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: listbot
+spec:
+  schedule: "0 */6 * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: listbot
+              image: ghcr.io/telekom-security/listbot:latest
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: config
+                  mountPath: /config
+                  readOnly: true
+                - name: data
+                  mountPath: /data
+                - name: cache
+                  mountPath: /cache
+          volumes:
+            - name: config
+              configMap:
+                name: listbot-config
+            - name: data
+              persistentVolumeClaim:
+                claimName: listbot-data
+            - name: cache
+              emptyDir: {}
+```
+
+Notes:
+
+- Another `runAsUser` works as well; `fsGroup` makes the mounted volumes
+  writable for it.
+- Use a PersistentVolumeClaim instead of `emptyDir` for `/cache` if the download
+  cache should survive between runs.
+- To publish the `.bz2` files to a second volume, mount it and pass the full
+  command via `args`, for example
+  `["run", "--config", "/config/listbot.toml", "--output-dir", "/data", "--cache-dir", "/cache/listbot", "--bz2-dir", "/public"]`.
 
 ## Commands
 
