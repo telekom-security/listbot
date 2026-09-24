@@ -33,6 +33,7 @@ class _ConfigModel(BaseModel):
 
 class _RunSection(_ConfigModel):
     output_dir: str = "."
+    bz2_dir: str | None = None
     workers: int = 8
     timeout: float = 30.0
     suricata_version: str = DEFAULT_SURICATA_VERSION
@@ -112,6 +113,8 @@ def merge_run_config(
     config: RunConfig,
     *,
     output_dir: str | None = None,
+    bz2_dir: str | None = None,
+    no_bz2_dir: bool | None = None,
     workers: int | None = None,
     timeout: float | None = None,
     suricata_version: str | None = None,
@@ -129,6 +132,7 @@ def merge_run_config(
     thresholds_enabled = config.thresholds.enabled
     logging_enabled = config.logging.enabled
     effective_log_dir = config.logging.dir
+    effective_bz2_dir = bz2_dir if bz2_dir is not None else config.run.bz2_dir
 
     if check_thresholds:
         thresholds_enabled = True
@@ -140,11 +144,14 @@ def merge_run_config(
     if no_log:
         logging_enabled = False
         effective_log_dir = None
+    if no_bz2_dir:
+        effective_bz2_dir = None
 
     return parse_run_config(
         {
             "run": {
                 "output_dir": output_dir if output_dir is not None else config.run.output_dir,
+                "bz2_dir": effective_bz2_dir,
                 "workers": workers if workers is not None else config.run.workers,
                 "timeout": timeout if timeout is not None else config.run.timeout,
                 "suricata_version": (

@@ -106,6 +106,34 @@ def test_no_log_disables_configured_logging() -> None:
     assert config.logging.dir is None
 
 
+def test_bz2_dir_is_disabled_by_default() -> None:
+    assert RunConfig().run.bz2_dir is None
+
+
+def test_bz2_dir_is_read_from_config() -> None:
+    config = parse_run_config(_config_data(run={"bz2_dir": "/srv/listbot/public"}))
+
+    assert config.run.bz2_dir == "/srv/listbot/public"
+
+
+def test_cli_bz2_dir_overrides_config() -> None:
+    config = merge_run_config(parse_run_config(_config_data(run={"bz2_dir": "from-config"})), bz2_dir="from-cli")
+
+    assert config.run.bz2_dir == "from-cli"
+
+
+def test_merge_keeps_configured_bz2_dir() -> None:
+    config = merge_run_config(parse_run_config(_config_data(run={"bz2_dir": "from-config"})))
+
+    assert config.run.bz2_dir == "from-config"
+
+
+def test_no_bz2_dir_disables_configured_bz2_dir() -> None:
+    config = merge_run_config(parse_run_config(_config_data(run={"bz2_dir": "from-config"})), no_bz2_dir=True)
+
+    assert config.run.bz2_dir is None
+
+
 def test_unknown_config_keys_are_rejected() -> None:
     with pytest.raises(ConfigError, match="Extra inputs"):
         parse_run_config(_config_data("publish", {"dir": "out"}))
@@ -149,6 +177,7 @@ def test_iprep_feed_config_values_must_be_boolean() -> None:
         ("run", {"timeout": "12.5"}, "valid number"),
         ("run", {"timeout": True}, "valid number"),
         ("run", {"output_dir": 12}, "valid string"),
+        ("run", {"bz2_dir": 1}, "valid string"),
         ("cache", {"cache_max_age": 6}, "valid string"),
     ],
 )

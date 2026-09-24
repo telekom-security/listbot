@@ -15,6 +15,7 @@ from listbot.generators import (
     FeedStat,
     USER_AGENT,
     build_iprep_map,
+    copy_compressed_output,
     evaluate_thresholds,
     fetch_url,
     run_all,
@@ -430,6 +431,72 @@ def test_successful_logged_run_writes_only_run_log(tmp_path, monkeypatch) -> Non
     assert not (tmp_path / "error.log").exists()
 
 
+def test_copy_compressed_output_copies_bz2_atomically(tmp_path) -> None:
+    result = _write_bz2_result(tmp_path / "out", "iprep.yaml", 1, b"payload")
+    target_dir = tmp_path / "pub" / "nested"
+
+    copied = copy_compressed_output(result, target_dir)
+
+    assert copied == target_dir / "iprep.yaml.bz2"
+    assert copied.read_bytes() == result.compressed_output.read_bytes()
+    assert result.bz2_copy == copied
+    assert sorted(path.name for path in target_dir.iterdir()) == ["iprep.yaml.bz2"]
+
+
+def test_copy_compressed_output_is_noop_for_same_directory(tmp_path) -> None:
+    result = _write_bz2_result(tmp_path, "cve.yaml", 1, b"payload")
+
+    copied = copy_compressed_output(result, tmp_path)
+
+    assert copied == result.compressed_output
+    assert result.bz2_copy == copied
+    assert copied.read_bytes() == b"payload"
+    assert not (tmp_path / "cve.yaml.bz2.tmp").exists()
+
+
+def test_build_iprep_map_copies_bz2_to_bz2_dir(tmp_path, monkeypatch) -> None:
+    now = datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc)
+    feeds = (Feed("first", "https://example.test/first.txt", "bad reputation"),)
+    monkeypatch.setattr(generators, "fetch_url", lambda url, **_kwargs: (b"8.8.8.8\n", url, 200, now))
+
+    result = build_iprep_map(tmp_path / "out", feeds=feeds, cache_enabled=False, bz2_dir=tmp_path / "pub")
+
+    assert result.bz2_copy == tmp_path / "pub" / "iprep.yaml.bz2"
+    assert result.bz2_copy.read_bytes() == result.compressed_output.read_bytes()
+    assert sorted(path.name for path in (tmp_path / "pub").iterdir()) == ["iprep.yaml.bz2"]
+
+
+def test_run_all_copies_bz2_files_when_run_succeeds(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(generators, "build_all_maps", _fake_writing_build_all_maps(5_000, 200_000))
+    bz2_dir = tmp_path / "pub"
+
+    cve, iprep, message, ok = run_all(tmp_path / "out", thresholds_enabled=True, bz2_dir=bz2_dir)
+
+    assert ok is True
+    assert cve.bz2_copy == bz2_dir / "cve.yaml.bz2"
+    assert iprep.bz2_copy == bz2_dir / "iprep.yaml.bz2"
+    assert (bz2_dir / "cve.yaml.bz2").read_bytes() == b"cve"
+    assert (bz2_dir / "iprep.yaml.bz2").read_bytes() == b"iprep"
+    assert "bz2_dir not updated" not in message
+
+
+def test_run_all_keeps_bz2_dir_unchanged_when_thresholds_fail(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(generators, "build_all_maps", _fake_writing_build_all_maps(1, 1))
+    bz2_dir = tmp_path / "pub"
+    bz2_dir.mkdir()
+    (bz2_dir / "iprep.yaml.bz2").write_bytes(b"last good")
+
+    cve, iprep, message, ok = run_all(tmp_path / "out", logging_enabled=True, bz2_dir=bz2_dir)
+
+    assert ok is False
+    assert cve.bz2_copy is None
+    assert iprep.bz2_copy is None
+    assert (bz2_dir / "iprep.yaml.bz2").read_bytes() == b"last good"
+    assert not (bz2_dir / "cve.yaml.bz2").exists()
+    assert "bz2_dir not updated: threshold check failed." in message
+    assert "bz2_dir not updated" in (tmp_path / "out" / "error.log").read_text(encoding="utf-8")
+
+
 def test_thresholds_pass_when_counts_reach_minimum() -> None:
     results = evaluate_thresholds(5_000, 200_000, min_cve=5_000, min_iprep=200_000)
 
@@ -462,6 +529,23 @@ def _fake_successful_build_all_maps(output_dir: Path, **_kwargs) -> tuple[BuildR
         count=200_000,
     )
     return cve, iprep
+
+
+def _write_bz2_result(output_dir: Path, name: str, count: int, payload: bytes) -> BuildResult:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    compressed = output_dir / f"{name}.bz2"
+    compressed.write_bytes(payload)
+    return BuildResult(output=output_dir / name, compressed_output=compressed, count=count)
+
+
+def _fake_writing_build_all_maps(cve_count: int, iprep_count: int):
+    def fake(output_dir: Path, **_kwargs) -> tuple[BuildResult, BuildResult]:
+        return (
+            _write_bz2_result(output_dir, "cve.yaml", cve_count, b"cve"),
+            _write_bz2_result(output_dir, "iprep.yaml", iprep_count, b"iprep"),
+        )
+
+    return fake
 
 
 class _FakeResponse:

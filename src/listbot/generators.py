@@ -51,6 +51,7 @@ class BuildResult:
     count: int
     stats: list[FeedStat] = field(default_factory=list)
     notice_output: Path | None = None
+    bz2_copy: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,7 @@ def build_iprep_map(
     cache_enabled: bool = True,
     cache_dir: Path | str = DEFAULT_CACHE_DIR,
     cache_max_age: str | timedelta = DEFAULT_CACHE_MAX_AGE,
+    bz2_dir: Path | None = None,
 ) -> BuildResult:
     output_dir.mkdir(parents=True, exist_ok=True)
     mapping: dict[str, str] = {}
@@ -147,6 +149,8 @@ def build_iprep_map(
     write_task = _add_progress_task(progress, "Writing iprep.yaml", 2)
     compressed = write_translation_map(mapping, output, progress=progress, progress_task=write_task)
     result = BuildResult(output=output, compressed_output=compressed, count=len(mapping), stats=stats)
+    if bz2_dir is not None:
+        copy_compressed_output(result, bz2_dir)
     if write_notice:
         notice_task = _add_progress_task(progress, f"Writing {NOTICE_FILENAME}", 1)
         result.notice_output = write_notice_file(output_dir, [result])
@@ -165,6 +169,7 @@ def build_cve_map(
     cache_enabled: bool = True,
     cache_dir: Path | str = DEFAULT_CACHE_DIR,
     cache_max_age: str | timedelta = DEFAULT_CACHE_MAX_AGE,
+    bz2_dir: Path | None = None,
 ) -> BuildResult:
     output_dir.mkdir(parents=True, exist_ok=True)
     source_url = url or ET_SID_MAP_URL_TEMPLATE.format(version=suricata_version)
@@ -218,6 +223,8 @@ def build_cve_map(
         )
     ]
     result = BuildResult(output=output, compressed_output=compressed, count=len(mapping), stats=stats)
+    if bz2_dir is not None:
+        copy_compressed_output(result, bz2_dir)
     if write_notice:
         notice_task = _add_progress_task(progress, f"Writing {NOTICE_FILENAME}", 1)
         result.notice_output = write_notice_file(output_dir, [result])
@@ -291,6 +298,7 @@ def run_all(
     cache_enabled: bool = True,
     cache_dir: Path | str = DEFAULT_CACHE_DIR,
     cache_max_age: str | timedelta = DEFAULT_CACHE_MAX_AGE,
+    bz2_dir: Path | None = None,
 ) -> tuple[BuildResult, BuildResult, str, bool]:
     cve_result, iprep_result = build_all_maps(
         output_dir,
@@ -323,6 +331,13 @@ def run_all(
     message = f"{now}: {cve_result.count} CVE IDs, {iprep_result.count} reps - {state}."
     if checks_enabled:
         message = "\n".join([message, *_format_threshold_log_lines(threshold_results)])
+
+    if bz2_dir is not None:
+        if ok:
+            copy_compressed_output(cve_result, bz2_dir)
+            copy_compressed_output(iprep_result, bz2_dir)
+        else:
+            message = "\n".join([message, "bz2_dir not updated: threshold check failed."])
 
     if logging_enabled:
         _write_run_log(message, ok=ok, log_dir=log_dir or output_dir)
@@ -364,6 +379,17 @@ def write_translation_map(
     tmp_compressed.replace(compressed)
     _advance_progress(progress, progress_task)
     return compressed
+
+
+def copy_compressed_output(result: BuildResult, target_dir: Path) -> Path:
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / result.compressed_output.name
+    if target.resolve() != result.compressed_output.resolve():
+        tmp_target = target.with_name(f"{target.name}.tmp")
+        shutil.copyfile(result.compressed_output, tmp_target)
+        tmp_target.replace(target)
+    result.bz2_copy = target
+    return target
 
 
 def write_notice_file(

@@ -206,6 +206,74 @@ def test_disabled_feed_is_not_passed_to_run(tmp_path, monkeypatch) -> None:
     assert "feodotracker" not in {feed.name for feed in captured["feeds"]}
 
 
+@pytest.mark.parametrize("command", ["run", "gen-iprep", "gen-cve"])
+def test_commands_accept_bz2_dir_options(command: str) -> None:
+    enabled = build_parser().parse_args([command, "--bz2-dir", "public"])
+    disabled = build_parser().parse_args([command, "--no-bz2-dir"])
+
+    assert enabled.bz2_dir == "public"
+    assert disabled.no_bz2_dir is True
+
+
+@pytest.mark.parametrize("command", ["run", "gen-iprep", "gen-cve"])
+def test_bz2_dir_options_are_mutually_exclusive(command: str) -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args([command, "--bz2-dir", "public", "--no-bz2-dir"])
+
+
+def test_bz2_dir_is_passed_to_run(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    captured = {}
+
+    def fake_run_all(output_dir, **kwargs):
+        captured["bz2_dir"] = kwargs["bz2_dir"]
+        cve = BuildResult(output=output_dir / "cve.yaml", compressed_output=output_dir / "cve.yaml.bz2", count=5_000)
+        iprep = BuildResult(output=output_dir / "iprep.yaml", compressed_output=output_dir / "iprep.yaml.bz2", count=200_000)
+        return cve, iprep, "ok", True
+
+    monkeypatch.setattr(cli_module, "run_all", fake_run_all)
+
+    assert cli_module.main(["run", "--output-dir", str(tmp_path / "out"), "--bz2-dir", str(tmp_path / "pub")]) == 0
+    assert captured["bz2_dir"] == tmp_path / "pub"
+
+
+def test_bz2_dir_is_passed_to_gen_commands(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    captured = {}
+
+    def fake_build_iprep_map(output_dir, **kwargs):
+        captured["iprep"] = kwargs["bz2_dir"]
+        return BuildResult(output=output_dir / "iprep.yaml", compressed_output=output_dir / "iprep.yaml.bz2", count=0)
+
+    def fake_build_cve_map(output_dir, **kwargs):
+        captured["cve"] = kwargs["bz2_dir"]
+        return BuildResult(output=output_dir / "cve.yaml", compressed_output=output_dir / "cve.yaml.bz2", count=0)
+
+    monkeypatch.setattr(cli_module, "build_iprep_map", fake_build_iprep_map)
+    monkeypatch.setattr(cli_module, "build_cve_map", fake_build_cve_map)
+
+    assert cli_module.main(["gen-iprep", "--output-dir", str(tmp_path), "--bz2-dir", str(tmp_path / "pub")]) == 0
+    assert cli_module.main(["gen-cve", "--output-dir", str(tmp_path)]) == 0
+    assert captured == {"iprep": tmp_path / "pub", "cve": None}
+
+
+def test_no_bz2_dir_disables_configured_bz2_dir_for_run(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    _write_config(config_path, run={"bz2_dir": str(tmp_path / "pub")})
+    captured = {}
+
+    def fake_run_all(output_dir, **kwargs):
+        captured["bz2_dir"] = kwargs["bz2_dir"]
+        cve = BuildResult(output=output_dir / "cve.yaml", compressed_output=output_dir / "cve.yaml.bz2", count=5_000)
+        iprep = BuildResult(output=output_dir / "iprep.yaml", compressed_output=output_dir / "iprep.yaml.bz2", count=200_000)
+        return cve, iprep, "ok", True
+
+    monkeypatch.setattr(cli_module, "run_all", fake_run_all)
+
+    assert cli_module.main(["run", "--config", str(config_path), "--output-dir", str(tmp_path), "--no-bz2-dir"]) == 0
+    assert captured["bz2_dir"] is None
+
+
 def test_main_returns_1_when_run_thresholds_fail(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     captured = {}

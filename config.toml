@@ -2,6 +2,11 @@
 # Directory for generated cve.yaml, iprep.yaml, compressed .bz2 files, and NOTICE.
 output_dir = "."
 
+# Optional additional directory for copies of cve.yaml.bz2 and iprep.yaml.bz2.
+# Leave commented to disable. A run that fails its threshold checks does not
+# update this directory, so it keeps the last good files.
+# bz2_dir = "/srv/listbot/public"
+
 # Number of concurrent IP reputation feed downloads.
 workers = 8
 

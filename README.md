@@ -166,6 +166,8 @@ listbot run --output-dir /var/lib/listbot
 Useful options:
 
 - `--config config.toml`: load command defaults from an explicit TOML config file
+- `--bz2-dir PATH`: also copy the generated `.bz2` files to this directory
+- `--no-bz2-dir`: disable `bz2_dir` configured in `--config`
 - `--workers 8`: number of concurrent IP feed downloads
 - `--timeout 30`: HTTP timeout in seconds
 - `--suricata-version 8.0.0`: Emerging Threats Open ruleset version
@@ -241,6 +243,7 @@ Excerpt:
 ```toml
 [run]
 output_dir = "."
+# bz2_dir = "/srv/listbot/public"
 workers = 8
 timeout = 30.0
 suricata_version = "8.0.0"
@@ -280,6 +283,14 @@ cache entry is older than `cache_max_age`, listbot deletes it before attempting 
 fresh download. There is no stale fallback: if the refresh fails, the feed is
 handled like any other failed download. Cache durations must be positive values
 with `m`, `h`, or `d` suffixes, for example `30m`, `6h`, or `2d`.
+
+`bz2_dir` is an optional second target for the compressed maps. When it is
+set, `run`, `gen-cve`, and `gen-iprep` copy their `.bz2` files there in addition
+to `output_dir`. YAML, `NOTICE`, and logs stay in `output_dir`. Each file is
+written to a temporary name first and then renamed, so readers never see a
+partial file. If `run` fails its threshold checks, `bz2_dir` is not updated and
+keeps the last good files; the run status and logs say so. `--bz2-dir PATH`
+enables or overrides the directory, and `--no-bz2-dir` disables a configured one.
 
 Logging also enables threshold checks. If `logging.dir` is omitted, logs are written
 to `output_dir`. `run.log` is an additive history of all logged runs; failed

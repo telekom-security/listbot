@@ -54,6 +54,7 @@ def main(argv: list[str] | None = None) -> int:
                     cache_enabled=settings.cache.enabled,
                     cache_dir=Path(settings.cache.dir),
                     cache_max_age=settings.cache.max_age,
+                    bz2_dir=_bz2_dir(settings),
                 )
             _print_iprep_summary(console, result)
             return 0
@@ -70,6 +71,7 @@ def main(argv: list[str] | None = None) -> int:
                     cache_enabled=settings.cache.enabled,
                     cache_dir=Path(settings.cache.dir),
                     cache_max_age=settings.cache.max_age,
+                    bz2_dir=_bz2_dir(settings),
                 )
             _print_cve_summary(console, result)
             return 0
@@ -93,6 +95,7 @@ def main(argv: list[str] | None = None) -> int:
                     cache_enabled=settings.cache.enabled,
                     cache_dir=Path(settings.cache.dir),
                     cache_max_age=settings.cache.max_age,
+                    bz2_dir=_bz2_dir(settings),
                 )
             console.print(_panel(message, title="Run Status", style="cyan" if ok else "red"))
             if settings.thresholds.enabled:
@@ -188,7 +191,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  listbot run --output-dir /var/lib/listbot\n"
             "  listbot run --config config.toml --output-dir /var/lib/listbot\n"
             "  listbot run --output-dir /var/lib/listbot --check-thresholds --min-iprep 500000\n"
-            "  listbot run --output-dir /var/lib/listbot --log-dir /var/log/listbot"
+            "  listbot run --output-dir /var/lib/listbot --log-dir /var/log/listbot\n"
+            "  listbot run --output-dir /var/lib/listbot --bz2-dir /srv/listbot/public"
         ),
         formatter_class=ListbotHelpFormatter,
     )
@@ -218,6 +222,18 @@ def _add_output_arg(parser: argparse.ArgumentParser) -> None:
         "--output-dir",
         metavar="PATH",
         help="Directory for generated YAML, bz2, and NOTICE files (default: config or '.')",
+    )
+    bz2_switch = output.add_mutually_exclusive_group()
+    bz2_switch.add_argument(
+        "--bz2-dir",
+        metavar="PATH",
+        help="Additional directory for copies of generated .bz2 files (default: config or disabled)",
+    )
+    bz2_switch.add_argument(
+        "--no-bz2-dir",
+        action="store_true",
+        default=None,
+        help="Disable bz2_dir configured in --config",
     )
 
 
@@ -322,6 +338,8 @@ def _config_from_args(args: argparse.Namespace) -> RunConfig:
     return merge_run_config(
         config,
         output_dir=getattr(args, "output_dir", None),
+        bz2_dir=getattr(args, "bz2_dir", None),
+        no_bz2_dir=getattr(args, "no_bz2_dir", None),
         workers=getattr(args, "workers", None),
         timeout=getattr(args, "timeout", None),
         suricata_version=getattr(args, "suricata_version", None),
@@ -336,6 +354,10 @@ def _config_from_args(args: argparse.Namespace) -> RunConfig:
         cache_max_age=getattr(args, "cache_max_age", None),
         feed_usage_profile=getattr(args, "feed_usage_profile", None),
     )
+
+
+def _bz2_dir(settings: RunConfig) -> Path | None:
+    return Path(settings.run.bz2_dir) if settings.run.bz2_dir else None
 
 
 def _cache_max_age_arg(value: str) -> str:
@@ -391,6 +413,8 @@ def _print_cve_summary(console: Console, result: BuildResult) -> None:
         f"[dim]YAML:[/dim] {result.output}\n"
         f"[dim]BZ2 :[/dim] {result.compressed_output}"
     )
+    if result.bz2_copy is not None:
+        body += f"\n[dim]BZ2 copy:[/dim] {result.bz2_copy}"
     if result.notice_output is not None:
         body += f"\n[dim]NOTICE:[/dim] {result.notice_output}"
     console.print(_panel(body, title="CVE Map"))
@@ -405,6 +429,8 @@ def _print_iprep_summary(console: Console, result: BuildResult) -> None:
         f"[dim]YAML :[/dim] {result.output}\n"
         f"[dim]BZ2  :[/dim] {result.compressed_output}"
     )
+    if result.bz2_copy is not None:
+        body += f"\n[dim]BZ2 copy:[/dim] {result.bz2_copy}"
     if result.notice_output is not None:
         body += f"\n[dim]NOTICE:[/dim] {result.notice_output}"
     console.print(_panel(body, title="IP Reputation Map", style="green" if not errors else "yellow"))
