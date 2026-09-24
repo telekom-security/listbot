@@ -7,6 +7,7 @@ from rich.align import Align
 from rich import box
 from rich.console import Console
 from rich.console import Group
+from rich.markup import escape
 from rich.panel import Panel
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
@@ -23,6 +24,7 @@ from .config import (
     load_run_config,
     merge_run_config,
     parse_cache_max_age,
+    parse_file_mode,
 )
 from .feeds import DEFAULT_SURICATA_VERSION
 from .generators import BuildResult, build_cve_map, build_iprep_map, evaluate_thresholds, run_all
@@ -55,8 +57,10 @@ def main(argv: list[str] | None = None) -> int:
                     cache_dir=Path(settings.cache.dir),
                     cache_max_age=settings.cache.max_age,
                     bz2_dir=_bz2_dir(settings),
+                    file_mode=parse_file_mode(settings.run.file_mode),
                 )
             _print_iprep_summary(console, result)
+            _print_warnings(console, [result])
             return 0
 
         if args.command == "gen-cve":
@@ -72,8 +76,10 @@ def main(argv: list[str] | None = None) -> int:
                     cache_dir=Path(settings.cache.dir),
                     cache_max_age=settings.cache.max_age,
                     bz2_dir=_bz2_dir(settings),
+                    file_mode=parse_file_mode(settings.run.file_mode),
                 )
             _print_cve_summary(console, result)
+            _print_warnings(console, [result])
             return 0
 
         if args.command == "run":
@@ -96,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
                     cache_dir=Path(settings.cache.dir),
                     cache_max_age=settings.cache.max_age,
                     bz2_dir=_bz2_dir(settings),
+                    file_mode=parse_file_mode(settings.run.file_mode),
                 )
             console.print(_panel(message, title="Run Status", style="cyan" if ok else "red"))
             if settings.thresholds.enabled:
@@ -108,6 +115,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             _print_cve_summary(console, cve_result)
             _print_iprep_summary(console, iprep_result)
+            _print_warnings(console, [cve_result, iprep_result])
             return 0 if ok else 1
 
     except KeyboardInterrupt:
@@ -235,6 +243,12 @@ def _add_output_arg(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Disable bz2_dir configured in --config",
     )
+    output.add_argument(
+        "--file-mode",
+        metavar="MODE",
+        type=_file_mode_arg,
+        help="Permissions for generated files, octal (default: config or 0644)",
+    )
 
 
 def _add_network_args(parser: argparse.ArgumentParser) -> None:
@@ -340,6 +354,7 @@ def _config_from_args(args: argparse.Namespace) -> RunConfig:
         output_dir=getattr(args, "output_dir", None),
         bz2_dir=getattr(args, "bz2_dir", None),
         no_bz2_dir=getattr(args, "no_bz2_dir", None),
+        file_mode=getattr(args, "file_mode", None),
         workers=getattr(args, "workers", None),
         timeout=getattr(args, "timeout", None),
         suricata_version=getattr(args, "suricata_version", None),
@@ -363,6 +378,14 @@ def _bz2_dir(settings: RunConfig) -> Path | None:
 def _cache_max_age_arg(value: str) -> str:
     try:
         parse_cache_max_age(value)
+    except ConfigError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    return value
+
+
+def _file_mode_arg(value: str) -> str:
+    try:
+        parse_file_mode(value)
     except ConfigError as exc:
         raise argparse.ArgumentTypeError(str(exc)) from exc
     return value
@@ -450,6 +473,13 @@ def _print_iprep_summary(console: Console, result: BuildResult) -> None:
         error = "" if is_ok else f"[red]{stat.error or 'unknown error'}[/red]"
         table.add_row(stat.name, stat.tag, status, extracted, added, error)
     console.print(_panel(table, title="Feed Contributions", style="green" if not errors else "yellow"))
+
+
+def _print_warnings(console: Console, results: list[BuildResult]) -> None:
+    warnings = list(dict.fromkeys(warning for result in results for warning in result.warnings))
+    if warnings:
+        body = "\n".join(f"[yellow]{escape(warning)}[/yellow]" for warning in warnings)
+        console.print(_panel(body, title="Warnings", style="yellow"))
 
 
 def _print_threshold_summary(

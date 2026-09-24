@@ -20,6 +20,7 @@ from .parsers import decode_payloads, extract_ipv4_indicators, first_cve_referen
 
 USER_AGENT = "curl/8.0"
 NOTICE_FILENAME = "NOTICE"
+DEFAULT_FILE_MODE = 0o644
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,7 @@ class BuildResult:
     stats: list[FeedStat] = field(default_factory=list)
     notice_output: Path | None = None
     bz2_copy: Path | None = None
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -81,6 +83,7 @@ def build_iprep_map(
     cache_dir: Path | str = DEFAULT_CACHE_DIR,
     cache_max_age: str | timedelta = DEFAULT_CACHE_MAX_AGE,
     bz2_dir: Path | None = None,
+    file_mode: int = DEFAULT_FILE_MODE,
 ) -> BuildResult:
     output_dir.mkdir(parents=True, exist_ok=True)
     mapping: dict[str, str] = {}
@@ -147,13 +150,20 @@ def build_iprep_map(
 
     output = output_dir / "iprep.yaml"
     write_task = _add_progress_task(progress, "Writing iprep.yaml", 2)
-    compressed = write_translation_map(mapping, output, progress=progress, progress_task=write_task)
-    result = BuildResult(output=output, compressed_output=compressed, count=len(mapping), stats=stats)
+    warnings: list[str] = []
+    compressed = write_translation_map(
+        mapping, output, progress=progress, progress_task=write_task, file_mode=file_mode, warnings=warnings
+    )
+    result = BuildResult(
+        output=output, compressed_output=compressed, count=len(mapping), stats=stats, warnings=warnings
+    )
     if bz2_dir is not None:
-        copy_compressed_output(result, bz2_dir)
+        copy_compressed_output(result, bz2_dir, file_mode=file_mode)
     if write_notice:
         notice_task = _add_progress_task(progress, f"Writing {NOTICE_FILENAME}", 1)
-        result.notice_output = write_notice_file(output_dir, [result])
+        result.notice_output = write_notice_file(
+            output_dir, [result], file_mode=file_mode, warnings=result.warnings
+        )
         _advance_progress(progress, notice_task)
     return result
 
@@ -170,6 +180,7 @@ def build_cve_map(
     cache_dir: Path | str = DEFAULT_CACHE_DIR,
     cache_max_age: str | timedelta = DEFAULT_CACHE_MAX_AGE,
     bz2_dir: Path | None = None,
+    file_mode: int = DEFAULT_FILE_MODE,
 ) -> BuildResult:
     output_dir.mkdir(parents=True, exist_ok=True)
     source_url = url or ET_SID_MAP_URL_TEMPLATE.format(version=suricata_version)
@@ -208,7 +219,10 @@ def build_cve_map(
 
     output = output_dir / "cve.yaml"
     write_task = _add_progress_task(progress, "Writing cve.yaml", 2)
-    compressed = write_translation_map(mapping, output, progress=progress, progress_task=write_task)
+    warnings: list[str] = []
+    compressed = write_translation_map(
+        mapping, output, progress=progress, progress_task=write_task, file_mode=file_mode, warnings=warnings
+    )
     stats = [
         FeedStat(
             name="emerging_threats_sid_msg",
@@ -222,12 +236,16 @@ def build_cve_map(
             error=error,
         )
     ]
-    result = BuildResult(output=output, compressed_output=compressed, count=len(mapping), stats=stats)
+    result = BuildResult(
+        output=output, compressed_output=compressed, count=len(mapping), stats=stats, warnings=warnings
+    )
     if bz2_dir is not None:
-        copy_compressed_output(result, bz2_dir)
+        copy_compressed_output(result, bz2_dir, file_mode=file_mode)
     if write_notice:
         notice_task = _add_progress_task(progress, f"Writing {NOTICE_FILENAME}", 1)
-        result.notice_output = write_notice_file(output_dir, [result])
+        result.notice_output = write_notice_file(
+            output_dir, [result], file_mode=file_mode, warnings=result.warnings
+        )
         _advance_progress(progress, notice_task)
     return result
 
@@ -244,6 +262,7 @@ def build_all_maps(
     cache_enabled: bool = True,
     cache_dir: Path | str = DEFAULT_CACHE_DIR,
     cache_max_age: str | timedelta = DEFAULT_CACHE_MAX_AGE,
+    file_mode: int = DEFAULT_FILE_MODE,
 ) -> tuple[BuildResult, BuildResult]:
     output_dir.mkdir(parents=True, exist_ok=True)
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
@@ -258,6 +277,7 @@ def build_all_maps(
             cache_enabled=cache_enabled,
             cache_dir=cache_dir,
             cache_max_age=cache_max_age,
+            file_mode=file_mode,
         )
         iprep_future = executor.submit(
             build_iprep_map,
@@ -270,11 +290,14 @@ def build_all_maps(
             cache_enabled=cache_enabled,
             cache_dir=cache_dir,
             cache_max_age=cache_max_age,
+            file_mode=file_mode,
         )
         cve_result, iprep_result = cve_future.result(), iprep_future.result()
 
     notice_task = _add_progress_task(progress, f"Writing {NOTICE_FILENAME}", 1)
-    notice_output = write_notice_file(output_dir, [cve_result, iprep_result])
+    notice_output = write_notice_file(
+        output_dir, [cve_result, iprep_result], file_mode=file_mode, warnings=cve_result.warnings
+    )
     cve_result.notice_output = notice_output
     iprep_result.notice_output = notice_output
     _advance_progress(progress, notice_task)
@@ -299,6 +322,7 @@ def run_all(
     cache_dir: Path | str = DEFAULT_CACHE_DIR,
     cache_max_age: str | timedelta = DEFAULT_CACHE_MAX_AGE,
     bz2_dir: Path | None = None,
+    file_mode: int = DEFAULT_FILE_MODE,
 ) -> tuple[BuildResult, BuildResult, str, bool]:
     cve_result, iprep_result = build_all_maps(
         output_dir,
@@ -311,6 +335,7 @@ def run_all(
         cache_enabled=cache_enabled,
         cache_dir=cache_dir,
         cache_max_age=cache_max_age,
+        file_mode=file_mode,
     )
 
     checks_enabled = thresholds_enabled or logging_enabled
@@ -334,10 +359,14 @@ def run_all(
 
     if bz2_dir is not None:
         if ok:
-            copy_compressed_output(cve_result, bz2_dir)
-            copy_compressed_output(iprep_result, bz2_dir)
+            copy_compressed_output(cve_result, bz2_dir, file_mode=file_mode)
+            copy_compressed_output(iprep_result, bz2_dir, file_mode=file_mode)
         else:
             message = "\n".join([message, "bz2_dir not updated: threshold check failed."])
+
+    warnings = [*cve_result.warnings, *iprep_result.warnings]
+    if warnings:
+        message = "\n".join([message, *(f"Warning: {warning}" for warning in warnings)])
 
     if logging_enabled:
         _write_run_log(message, ok=ok, log_dir=log_dir or output_dir)
@@ -364,11 +393,14 @@ def write_translation_map(
     *,
     progress: Any | None = None,
     progress_task: Any | None = None,
+    file_mode: int = DEFAULT_FILE_MODE,
+    warnings: list[str] | None = None,
 ) -> Path:
     tmp_output = output.with_name(f"{output.name}.tmp")
     with tmp_output.open("w", encoding="utf-8", newline="\n") as handle:
         for key in sorted(mapping):
             handle.write(f'"{_yaml_escape(key)}": "{_yaml_escape(mapping[key])}"\n')
+    _apply_file_mode(tmp_output, output, file_mode, warnings)
     tmp_output.replace(output)
     _advance_progress(progress, progress_task)
 
@@ -376,20 +408,30 @@ def write_translation_map(
     tmp_compressed = compressed.with_name(f"{compressed.name}.tmp")
     with output.open("rb") as source, bz2.open(tmp_compressed, "wb", compresslevel=9) as target:
         shutil.copyfileobj(source, target)
+    _apply_file_mode(tmp_compressed, compressed, file_mode, warnings)
     tmp_compressed.replace(compressed)
     _advance_progress(progress, progress_task)
     return compressed
 
 
-def copy_compressed_output(result: BuildResult, target_dir: Path) -> Path:
+def copy_compressed_output(result: BuildResult, target_dir: Path, *, file_mode: int = DEFAULT_FILE_MODE) -> Path:
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / result.compressed_output.name
     if target.resolve() != result.compressed_output.resolve():
         tmp_target = target.with_name(f"{target.name}.tmp")
         shutil.copyfile(result.compressed_output, tmp_target)
+        _apply_file_mode(tmp_target, target, file_mode, result.warnings)
         tmp_target.replace(target)
     result.bz2_copy = target
     return target
+
+
+def _apply_file_mode(path: Path, final: Path, mode: int, warnings: list[str] | None) -> None:
+    try:
+        path.chmod(mode)
+    except OSError as exc:
+        if warnings is not None:
+            warnings.append(f"Could not set mode {mode:04o} on {final}: {exc.strerror or exc}")
 
 
 def write_notice_file(
@@ -397,6 +439,8 @@ def write_notice_file(
     results: list[BuildResult],
     *,
     generated_at: datetime | None = None,
+    file_mode: int = DEFAULT_FILE_MODE,
+    warnings: list[str] | None = None,
 ) -> Path:
     generated_at = generated_at or datetime.now(timezone.utc)
     output = output_dir / NOTICE_FILENAME
@@ -452,6 +496,7 @@ def write_notice_file(
         for row in rows:
             handle.write(f"{row}\n")
 
+    _apply_file_mode(tmp_output, output, file_mode, warnings)
     tmp_output.replace(output)
     return output
 

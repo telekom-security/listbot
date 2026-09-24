@@ -13,6 +13,7 @@ from listbot.config import (
     load_run_config,
     merge_run_config,
     parse_cache_max_age,
+    parse_file_mode,
     parse_run_config,
 )
 
@@ -134,6 +135,34 @@ def test_no_bz2_dir_disables_configured_bz2_dir() -> None:
     assert config.run.bz2_dir is None
 
 
+def test_file_mode_defaults_to_0644() -> None:
+    assert RunConfig().run.file_mode == "0644"
+
+
+def test_file_mode_is_read_from_config_and_overridden_by_cli() -> None:
+    config = parse_run_config(_config_data(run={"file_mode": "0640"}))
+
+    assert config.run.file_mode == "0640"
+    assert merge_run_config(config).run.file_mode == "0640"
+    assert merge_run_config(config, file_mode="0600").run.file_mode == "0600"
+
+
+@pytest.mark.parametrize(("value", "expected"), [("0644", 0o644), ("640", 0o640), ("0600", 0o600)])
+def test_parse_file_mode(value: str, expected: int) -> None:
+    assert parse_file_mode(value) == expected
+
+
+@pytest.mark.parametrize("value", ["0888", "4755", "64", "rw-r--r--", "", "00644"])
+def test_invalid_file_mode_is_rejected(value: str) -> None:
+    with pytest.raises(ConfigError, match="File mode"):
+        parse_file_mode(value)
+
+
+def test_config_rejects_invalid_file_mode() -> None:
+    with pytest.raises(ConfigError, match="File mode"):
+        parse_run_config(_config_data(run={"file_mode": "0888"}))
+
+
 def test_unknown_config_keys_are_rejected() -> None:
     with pytest.raises(ConfigError, match="Extra inputs"):
         parse_run_config(_config_data("publish", {"dir": "out"}))
@@ -178,6 +207,7 @@ def test_iprep_feed_config_values_must_be_boolean() -> None:
         ("run", {"timeout": True}, "valid number"),
         ("run", {"output_dir": 12}, "valid string"),
         ("run", {"bz2_dir": 1}, "valid string"),
+        ("run", {"file_mode": 644}, "valid string"),
         ("cache", {"cache_max_age": 6}, "valid string"),
     ],
 )

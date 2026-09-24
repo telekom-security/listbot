@@ -13,7 +13,9 @@ from .feeds import DEFAULT_SURICATA_VERSION, Feed, IPREP_FEEDS
 DEFAULT_CONFIG_PATH = Path("config.toml")
 DEFAULT_CACHE_DIR = ".cache/listbot"
 DEFAULT_CACHE_MAX_AGE = "6h"
+DEFAULT_FILE_MODE = "0644"
 _DURATION_RE = re.compile(r"^([1-9][0-9]*)([mhd])$")
+_FILE_MODE_RE = re.compile(r"^0?[0-7]{3}$")
 _IPREP_FEED_IDS = tuple(feed.name for feed in IPREP_FEEDS)
 VALID_FEED_USAGE_PROFILES = frozenset({"all", "commercial", "non-commercial"})
 FeedUsageProfile = Literal["all", "commercial", "non-commercial"]
@@ -34,10 +36,17 @@ class _ConfigModel(BaseModel):
 class _RunSection(_ConfigModel):
     output_dir: str = "."
     bz2_dir: str | None = None
+    file_mode: str = DEFAULT_FILE_MODE
     workers: int = 8
     timeout: float = 30.0
     suricata_version: str = DEFAULT_SURICATA_VERSION
     cve_url: str | None = None
+
+    @field_validator("file_mode")
+    @classmethod
+    def _validate_file_mode(cls, value: str) -> str:
+        parse_file_mode(value)
+        return value
 
 
 class _CacheSection(_ConfigModel):
@@ -115,6 +124,7 @@ def merge_run_config(
     output_dir: str | None = None,
     bz2_dir: str | None = None,
     no_bz2_dir: bool | None = None,
+    file_mode: str | None = None,
     workers: int | None = None,
     timeout: float | None = None,
     suricata_version: str | None = None,
@@ -152,6 +162,7 @@ def merge_run_config(
             "run": {
                 "output_dir": output_dir if output_dir is not None else config.run.output_dir,
                 "bz2_dir": effective_bz2_dir,
+                "file_mode": file_mode if file_mode is not None else config.run.file_mode,
                 "workers": workers if workers is not None else config.run.workers,
                 "timeout": timeout if timeout is not None else config.run.timeout,
                 "suricata_version": (
@@ -200,6 +211,12 @@ def parse_cache_max_age(value: str) -> timedelta:
     if unit == "h":
         return timedelta(hours=amount)
     return timedelta(days=amount)
+
+
+def parse_file_mode(value: str) -> int:
+    if _FILE_MODE_RE.fullmatch(value) is None:
+        raise ConfigError("File mode must be an octal permission like 0644 or 640")
+    return int(value, 8)
 
 
 def _feed_matches_usage_profile(feed: Feed, profile: str) -> bool:

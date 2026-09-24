@@ -244,6 +244,7 @@ Useful options:
 - `--config config.toml`: load command defaults from an explicit TOML config file
 - `--bz2-dir PATH`: also copy the generated `.bz2` files to this directory
 - `--no-bz2-dir`: disable `bz2_dir` configured in `--config`
+- `--file-mode 0644`: octal permissions for generated YAML, `.bz2`, and `NOTICE` files
 - `--workers 8`: number of concurrent IP feed downloads
 - `--timeout 30`: HTTP timeout in seconds
 - `--suricata-version 8.0.0`: Emerging Threats Open ruleset version
@@ -320,6 +321,7 @@ Excerpt:
 [run]
 output_dir = "."
 # bz2_dir = "/srv/listbot/public"
+file_mode = "0644"
 workers = 8
 timeout = 30.0
 suricata_version = "8.0.0"
@@ -367,6 +369,14 @@ written to a temporary name first and then renamed, so readers never see a
 partial file. If `run` fails its threshold checks, `bz2_dir` is not updated and
 keeps the last good files; the run status and logs say so. `--bz2-dir PATH`
 enables or overrides the directory, and `--no-bz2-dir` disables a configured one.
+
+`file_mode` sets the permissions of the generated YAML, `.bz2`, and `NOTICE`
+files in `output_dir` and `bz2_dir` (default `0644`), independent of the
+process umask. Use 3 or 4 octal digits, for example `0640`; setuid, setgid,
+and sticky bits are not accepted. Logs and cache files keep their default
+permissions. If the permissions cannot be set, for example on a network mount
+that does not allow `chmod`, the file is still written and listbot prints a
+warning (also recorded in the logs) without failing the run.
 
 Logging also enables threshold checks. If `logging.dir` is omitted, logs are written
 to `output_dir`. `run.log` is an additive history of all logged runs; failed

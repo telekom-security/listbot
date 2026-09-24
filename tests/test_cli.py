@@ -221,6 +221,54 @@ def test_bz2_dir_options_are_mutually_exclusive(command: str) -> None:
         build_parser().parse_args([command, "--bz2-dir", "public", "--no-bz2-dir"])
 
 
+@pytest.mark.parametrize("command", ["run", "gen-iprep", "gen-cve"])
+def test_commands_accept_file_mode(command: str) -> None:
+    assert build_parser().parse_args([command, "--file-mode", "0600"]).file_mode == "0600"
+
+
+def test_invalid_file_mode_is_rejected_by_cli() -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["run", "--file-mode", "999"])
+
+
+def test_file_mode_is_passed_to_run_and_gen_commands(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    captured = {}
+
+    def fake_run_all(output_dir, **kwargs):
+        captured["run"] = kwargs["file_mode"]
+        cve = BuildResult(output=output_dir / "cve.yaml", compressed_output=output_dir / "cve.yaml.bz2", count=5_000)
+        iprep = BuildResult(output=output_dir / "iprep.yaml", compressed_output=output_dir / "iprep.yaml.bz2", count=200_000)
+        return cve, iprep, "ok", True
+
+    def fake_build_cve_map(output_dir, **kwargs):
+        captured["cve"] = kwargs["file_mode"]
+        return BuildResult(output=output_dir / "cve.yaml", compressed_output=output_dir / "cve.yaml.bz2", count=0)
+
+    monkeypatch.setattr(cli_module, "run_all", fake_run_all)
+    monkeypatch.setattr(cli_module, "build_cve_map", fake_build_cve_map)
+
+    assert cli_module.main(["run", "--output-dir", str(tmp_path), "--file-mode", "0600"]) == 0
+    assert cli_module.main(["gen-cve", "--output-dir", str(tmp_path)]) == 0
+    assert captured == {"run": 0o600, "cve": 0o644}
+
+
+def test_warnings_are_printed(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def fake_build_cve_map(output_dir, **kwargs):
+        result = BuildResult(output=output_dir / "cve.yaml", compressed_output=output_dir / "cve.yaml.bz2", count=0)
+        result.warnings.append("Could not set mode 0644 on /data/cve.yaml: Operation not permitted")
+        return result
+
+    monkeypatch.setattr(cli_module, "build_cve_map", fake_build_cve_map)
+
+    assert cli_module.main(["gen-cve", "--output-dir", str(tmp_path)]) == 0
+    output = capsys.readouterr().out
+    assert "Warnings" in output
+    assert "Could not set mode 0644" in output
+
+
 def test_bz2_dir_is_passed_to_run(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     captured = {}

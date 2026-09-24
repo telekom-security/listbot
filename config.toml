@@ -7,6 +7,11 @@ output_dir = "."
 # update this directory, so it keeps the last good files.
 # bz2_dir = "/srv/listbot/public"
 
+# Octal permissions for generated YAML, .bz2, and NOTICE files in output_dir and
+# bz2_dir. Logs and cache files are not affected. If the permissions cannot be
+# set (for example on some network mounts), listbot only prints a warning.
+file_mode = "0644"
+
 # Number of concurrent IP reputation feed downloads.
 workers = 8
 

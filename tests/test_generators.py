@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import bz2
 import json
+import os
+import stat
 import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
@@ -153,6 +155,96 @@ def test_write_translation_map_uses_legacy_scalar_format(tmp_path) -> None:
     expected = '"1.1.1.1": "bad reputation"\n"2.2.2.2": "attack source"\n'
     assert output.read_text(encoding="utf-8") == expected
     assert bz2.decompress(compressed.read_bytes()).decode("utf-8") == expected
+
+
+def _mode(path: Path) -> int:
+    return stat.S_IMODE(path.stat().st_mode)
+
+
+@pytest.fixture
+def strict_umask():
+    previous = os.umask(0o077)
+    yield
+    os.umask(previous)
+
+
+def test_write_translation_map_sets_default_mode_despite_umask(tmp_path, strict_umask) -> None:
+    output = tmp_path / "sample.yaml"
+
+    compressed = write_translation_map({"1.1.1.1": "bad reputation"}, output)
+
+    assert _mode(output) == 0o644
+    assert _mode(compressed) == 0o644
+
+
+def test_write_translation_map_uses_configured_mode(tmp_path) -> None:
+    output = tmp_path / "sample.yaml"
+
+    compressed = write_translation_map({"1.1.1.1": "bad reputation"}, output, file_mode=0o600)
+
+    assert _mode(output) == 0o600
+    assert _mode(compressed) == 0o600
+
+
+def test_write_notice_file_and_bz2_copy_use_file_mode(tmp_path, strict_umask) -> None:
+    result = _write_bz2_result(tmp_path / "out", "cve.yaml", 1, b"payload")
+
+    notice = write_notice_file(tmp_path / "out", [result], file_mode=0o640)
+    copied = copy_compressed_output(result, tmp_path / "pub", file_mode=0o640)
+
+    assert _mode(notice) == 0o640
+    assert _mode(copied) == 0o640
+
+
+def test_chmod_failure_warns_and_still_writes(tmp_path, monkeypatch) -> None:
+    def refuse_chmod(self, mode, **_kwargs):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(Path, "chmod", refuse_chmod)
+    output = tmp_path / "sample.yaml"
+    warnings: list[str] = []
+
+    compressed = write_translation_map({"1.1.1.1": "bad reputation"}, output, warnings=warnings)
+
+    assert output.exists()
+    assert compressed.exists()
+    assert not list(tmp_path.glob("*.tmp"))
+    assert warnings == [
+        f"Could not set mode 0644 on {output}: Operation not permitted",
+        f"Could not set mode 0644 on {compressed}: Operation not permitted",
+    ]
+
+
+def test_build_iprep_map_collects_chmod_warnings(tmp_path, monkeypatch) -> None:
+    now = datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc)
+    feeds = (Feed("first", "https://example.test/first.txt", "bad reputation"),)
+    monkeypatch.setattr(generators, "fetch_url", lambda url, **_kwargs: (b"8.8.8.8\n", url, 200, now))
+
+    def refuse_chmod(self, mode, **_kwargs):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(Path, "chmod", refuse_chmod)
+
+    result = build_iprep_map(tmp_path / "out", feeds=feeds, cache_enabled=False, bz2_dir=tmp_path / "pub")
+
+    assert len(result.warnings) == 4
+    assert any(str(tmp_path / "out" / "NOTICE") in warning for warning in result.warnings)
+    assert any(str(tmp_path / "pub" / "iprep.yaml.bz2") in warning for warning in result.warnings)
+
+
+def test_run_all_logs_warnings_without_failing(tmp_path, monkeypatch) -> None:
+    def fake(output_dir: Path, **_kwargs) -> tuple[BuildResult, BuildResult]:
+        cve, iprep = _fake_successful_build_all_maps(output_dir)
+        cve.warnings.append("Could not set mode 0644 on NOTICE: Operation not permitted")
+        return cve, iprep
+
+    monkeypatch.setattr(generators, "build_all_maps", fake)
+
+    _cve, _iprep, message, ok = run_all(tmp_path, logging_enabled=True)
+
+    assert ok is True
+    assert "Warning: Could not set mode 0644 on NOTICE: Operation not permitted" in message
+    assert "Warning: Could not set mode" in (tmp_path / "run.log").read_text(encoding="utf-8")
 
 
 def test_write_translation_map_escapes_control_characters(tmp_path) -> None:
