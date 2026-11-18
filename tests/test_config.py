@@ -252,6 +252,7 @@ def test_commercial_profile_selects_only_unrestricted_feeds() -> None:
         "feodotracker",
         "maltrail_mass_scanner",
         "ipsum_level3",
+        "netapi_honeypot",
     }
 
 
@@ -266,6 +267,7 @@ def test_non_commercial_profile_selects_unrestricted_and_non_commercial_feeds() 
         "firehol_dshield",
         "dshield",
         "ipsum_level3",
+        "netapi_honeypot",
         "bitwire_outbound",
         "turris",
     }
@@ -286,7 +288,11 @@ def test_usage_profile_respects_individual_feed_switches() -> None:
     feeds["ipsum_level3"] = False
     config = parse_run_config(_config_data("feeds", {"usage_profile": "commercial", "iprep": feeds}))
 
-    assert {feed.name for feed in enabled_iprep_feeds(config)} == {"feodotracker", "maltrail_mass_scanner"}
+    assert {feed.name for feed in enabled_iprep_feeds(config)} == {
+        "feodotracker",
+        "maltrail_mass_scanner",
+        "netapi_honeypot",
+    }
 
 
 @pytest.mark.parametrize(
