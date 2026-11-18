@@ -514,7 +514,7 @@ Usage classes used by the profile filter:
 
 Initial conservative classification:
 
-- `unrestricted`: `feodotracker`, `maltrail_mass_scanner`, `ipsum_level3`
+- `unrestricted`: `feodotracker`, `maltrail_mass_scanner`, `ipsum_level3`, `netapi_honeypot`
 - `non_commercial`: `firehol_dshield`, `dshield`, `bitwire_outbound`, `turris`
 - `restricted`: `binary_defense_banlist`
 - `unknown`: all other IP reputation feeds
@@ -557,6 +557,7 @@ Initial conservative classification:
 | `cinsscore` | [CINS Score](https://cinsscore.com/list/ci-badguys.txt) | `bad reputation` | Bad reputation badguys list. | Public CINS Army list; no explicit feed license found. |
 | `greensnow` | [GreenSnow](http://blocklist.greensnow.co/greensnow.txt) | `attack source` | Generic attack-source blacklist. | Public blacklist; no explicit feed license found. |
 | `rutgers` | [Rutgers DROP attackers](https://report.cs.rutgers.edu/DROP/attackers) | `attack source` | Generic DROP attack sources. | No explicit feed license found. |
+| `netapi_honeypot` | [NetAPI honeypot attackers](https://netapi.com/api2/?method=compromised&dataset_type=ip) | `attack source` | IPv4 addresses that attacked NetAPI honeypot sensors in the last 48 hours, regenerated hourly. | [CC BY 4.0](https://netapi.com/compromised-ips/); attribution required. |
 | `dshield` | [DShield block list](https://feeds.dshield.org/block.txt) | `scan source` | Top scan-source subnets, parsed from start/end ranges. | [Creative Commons BY-NC-SA 2.5](http://creativecommons.org/licenses/by-nc-sa/2.5/) per feed header. |
 | `ipsum_level3` | [IPsum level 3](https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt) | `bad reputation` | IPs seen on at least three source lists. | [Unlicense/public-domain dedication](https://raw.githubusercontent.com/stamparm/ipsum/master/LICENSE). |
 | `firehol_php_commenters_30d` | [FireHOL Project Honey Pot commenters 30d](https://iplists.firehol.org/files/php_commenters_30d.ipset) | `comment spam` | Project Honey Pot comment spam sources seen in the last 30 days. | FireHOL mirror; Project Honey Pot terms may apply; explicit feed license not stated in the mirrored file. |

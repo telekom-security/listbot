@@ -100,6 +100,7 @@ def test_analyst_facing_feed_tags_are_explicit() -> None:
         "turris": "service abuse",
         "greensnow": "attack source",
         "rutgers": "attack source",
+        "netapi_honeypot": "attack source",
         "tor_bulk_exit": "tor exit",
         "tor_exit_addresses": "tor exit",
         "firehol_dm_tor": "tor exit",
@@ -124,6 +125,7 @@ def test_feed_usage_classes_are_conservative() -> None:
         "feodotracker",
         "maltrail_mass_scanner",
         "ipsum_level3",
+        "netapi_honeypot",
     }
     non_commercial = {
         "firehol_dshield",

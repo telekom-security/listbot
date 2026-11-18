@@ -88,6 +88,7 @@ firehol_blocklist_de = true
 cinsscore = true
 greensnow = true
 rutgers = true
+netapi_honeypot = true
 dshield = true
 ipsum_level3 = true
 

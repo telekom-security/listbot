@@ -242,6 +242,11 @@ FEED_NOTICES: dict[str, FeedNotice] = {
     ),
     "greensnow": FeedNotice("GreenSnow", "Generic attack-source blacklist.", "Public blacklist; no explicit feed license found."),
     "rutgers": FeedNotice("Rutgers DROP attackers", "Generic DROP attack sources.", NO_EXPLICIT_LICENSE),
+    "netapi_honeypot": FeedNotice(
+        "NetAPI honeypot attackers",
+        "IPv4 addresses that attacked NetAPI honeypot sensors in the last 48 hours.",
+        "CC BY 4.0 per https://netapi.com/compromised-ips/; attribution required.",
+    ),
     "dshield": FeedNotice(
         "DShield block list",
         "Top scan-source subnets, parsed from start/end ranges.",
@@ -491,6 +496,12 @@ IPREP_FEEDS: tuple[Feed, ...] = (
     Feed("cinsscore", "https://cinsscore.com/list/ci-badguys.txt", "bad reputation"),
     Feed("greensnow", "http://blocklist.greensnow.co/greensnow.txt", "attack source"),
     Feed("rutgers", "https://report.cs.rutgers.edu/DROP/attackers", "attack source"),
+    Feed(
+        "netapi_honeypot",
+        "https://netapi.com/api2/?method=compromised&dataset_type=ip",
+        "attack source",
+        usage_class="unrestricted",
+    ),
     Feed(
         "dshield",
         "https://feeds.dshield.org/block.txt",
